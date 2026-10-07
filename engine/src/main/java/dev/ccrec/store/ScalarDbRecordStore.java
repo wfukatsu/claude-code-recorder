@@ -127,6 +127,7 @@ public final class ScalarDbRecordStore implements RecordStore {
               .addColumn("ts", DataType.BIGINT)
               .addColumn("uuid", DataType.TEXT)
               .addColumn("parent_uuid", DataType.TEXT)
+              .addColumn("message_id", DataType.TEXT)
               .addColumn("model", DataType.TEXT)
               .addColumn("tool_name", DataType.TEXT)
               .addColumn("tool_use_id", DataType.TEXT)
@@ -166,14 +167,25 @@ public final class ScalarDbRecordStore implements RecordStore {
               .addColumn("source_path", DataType.TEXT)
               .addColumn("byte_offset", DataType.BIGINT)
               .addColumn("line_no", DataType.INT)
+              .addColumn("usage_message_id", DataType.TEXT)
               .addPartitionKey("host_id")
               .addClusteringKey("source_path_hash", Scan.Ordering.Order.ASC)
               .build(),
           true);
+      addColumnIfMissing(admin, MESSAGES, "message_id");
+      addColumnIfMissing(admin, INGEST_STATE, "usage_message_id");
     } catch (ExecutionException e) {
       throw new StoreException("could not create the ccrec schema", e);
     } finally {
       admin.close();
+    }
+  }
+
+  /** For a column introduced after 0.1.0: creating a table leaves one that exists as it is. */
+  private static void addColumnIfMissing(
+      DistributedTransactionAdmin admin, String table, String column) throws ExecutionException {
+    if (!admin.getTableMetadata(NS, table).getColumnNames().contains(column)) {
+      admin.addNewColumnToTable(NS, table, column, DataType.TEXT);
     }
   }
 
@@ -196,55 +208,59 @@ public final class ScalarDbRecordStore implements RecordStore {
         });
   }
 
-  @Override
-  public void upsertSession(SessionRecord session) {
-    write(
-        tx -> {
-          UpsertBuilder.Buildable upsert =
-              Upsert.newBuilder()
-                  .namespace(NS)
-                  .table(SESSIONS)
-                  .partitionKey(Key.ofText("account_id", session.accountId()))
-                  .clusteringKey(
-                      Key.newBuilder()
-                          .addBigInt("started_at", session.startedAt())
-                          .addText("session_id", session.sessionId())
-                          .build())
-                  .textValue("org_id", session.orgId());
-          text(upsert, "host_id", session.hostId());
-          text(upsert, "project_path", session.projectPath());
-          text(upsert, "git_branch", session.gitBranch());
-          text(upsert, "cc_version", session.ccVersion());
-          text(upsert, "model", session.model());
-          text(upsert, "title", session.title());
-          bigInt(upsert, "ended_at", session.endedAt());
-          tx.upsert(upsert.build());
+  /** The session row and its by-day index row. */
+  private static void putSession(DistributedTransaction tx, SessionRecord session)
+      throws TransactionException {
+    UpsertBuilder.Buildable upsert =
+        Upsert.newBuilder()
+            .namespace(NS)
+            .table(SESSIONS)
+            .partitionKey(Key.ofText("account_id", session.accountId()))
+            .clusteringKey(
+                Key.newBuilder()
+                    .addBigInt("started_at", session.startedAt())
+                    .addText("session_id", session.sessionId())
+                    .build())
+            .textValue("org_id", session.orgId());
+    text(upsert, "host_id", session.hostId());
+    text(upsert, "project_path", session.projectPath());
+    text(upsert, "git_branch", session.gitBranch());
+    text(upsert, "cc_version", session.ccVersion());
+    text(upsert, "model", session.model());
+    text(upsert, "title", session.title());
+    bigInt(upsert, "ended_at", session.endedAt());
+    tx.upsert(upsert.build());
 
-          UpsertBuilder.Buildable byDay =
-              Upsert.newBuilder()
-                  .namespace(NS)
-                  .table(SESSIONS_BY_DAY)
-                  .partitionKey(
-                      Key.newBuilder()
-                          .addText("org_id", session.orgId())
-                          .addInt("day", utcDay(session.startedAt()))
-                          .build())
-                  .clusteringKey(
-                      Key.newBuilder()
-                          .addBigInt("started_at", session.startedAt())
-                          .addText("session_id", session.sessionId())
-                          .build())
-                  .textValue("account_id", session.accountId());
-          text(byDay, "project_path", session.projectPath());
-          tx.upsert(byDay.build());
-        });
+    UpsertBuilder.Buildable byDay =
+        Upsert.newBuilder()
+            .namespace(NS)
+            .table(SESSIONS_BY_DAY)
+            .partitionKey(
+                Key.newBuilder()
+                    .addText("org_id", session.orgId())
+                    .addInt("day", utcDay(session.startedAt()))
+                    .build())
+            .clusteringKey(
+                Key.newBuilder()
+                    .addBigInt("started_at", session.startedAt())
+                    .addText("session_id", session.sessionId())
+                    .build())
+            .textValue("account_id", session.accountId());
+    text(byDay, "project_path", session.projectPath());
+    tx.upsert(byDay.build());
   }
 
   @Override
   public void writeBatch(
-      List<MessageRecord> messages, Map<String, String> contents, IngestState state) {
+      List<MessageRecord> messages,
+      Map<String, String> contents,
+      IngestState state,
+      SessionRecord session) {
     write(
         tx -> {
+          if (session != null) {
+            putSession(tx, session);
+          }
           for (Map.Entry<String, String> content : contents.entrySet()) {
             putContentIfAbsent(tx, content.getKey(), content.getValue());
           }
@@ -260,6 +276,7 @@ public final class ScalarDbRecordStore implements RecordStore {
                   .textValue("source_path", state.sourcePath())
                   .bigIntValue("byte_offset", state.offset())
                   .intValue("line_no", state.lineNo())
+                  .textValue("usage_message_id", state.usageMessageId())
                   .build());
         });
   }
@@ -314,6 +331,7 @@ public final class ScalarDbRecordStore implements RecordStore {
     bigInt(upsert, "ts", m.ts());
     text(upsert, "uuid", m.uuid());
     text(upsert, "parent_uuid", m.parentUuid());
+    text(upsert, "message_id", m.messageId());
     text(upsert, "model", m.model());
     text(upsert, "tool_name", m.toolName());
     text(upsert, "tool_use_id", m.toolUseId());
@@ -344,7 +362,8 @@ public final class ScalarDbRecordStore implements RecordStore {
                             sourcePathHash,
                             r.getText("source_path"),
                             r.getBigInt("byte_offset"),
-                            r.getInt("line_no"))));
+                            r.getInt("line_no"),
+                            r.getText("usage_message_id"))));
   }
 
   @Override
@@ -455,6 +474,7 @@ public final class ScalarDbRecordStore implements RecordStore {
                     nullableBigInt(r, "ts"),
                     r.getText("uuid"),
                     r.getText("parent_uuid"),
+                    r.getText("message_id"),
                     r.getText("model"),
                     r.getText("tool_name"),
                     r.getText("tool_use_id"),

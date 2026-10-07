@@ -16,16 +16,19 @@ public interface RecordStore extends AutoCloseable {
 
   void upsertAccount(Account account, long seenAt);
 
-  /** Writes the session row and its by-day index row. */
-  void upsertSession(SessionRecord session);
-
   /**
-   * Atomically writes messages, the content they reference and the ingest position. All keys are
-   * derived from the source, so repeating a batch is harmless.
+   * Atomically writes messages, the content they reference, the ingest position and — so that no
+   * recorded line is ever left without one — the session they belong to. All keys are derived from
+   * the source, so repeating a batch is harmless.
    *
    * @param contents text by content hash; content already stored is not rewritten
+   * @param session the session row and its by-day index row to write along, or null for none
    */
-  void writeBatch(List<MessageRecord> messages, Map<String, String> contents, IngestState state);
+  void writeBatch(
+      List<MessageRecord> messages,
+      Map<String, String> contents,
+      IngestState state,
+      SessionRecord session);
 
   Optional<IngestState> ingestState(String hostId, String sourcePathHash);
 

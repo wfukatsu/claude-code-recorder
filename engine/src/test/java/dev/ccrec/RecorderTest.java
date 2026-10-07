@@ -97,7 +97,7 @@ class RecorderTest {
       assertFalse(asked.contains("sk-ant-"), "credentials are masked before storage");
 
       MessageRecord thinking = messages.get(3);
-      assertEquals(10L, thinking.inputTokens(), "usage is recorded once per line, on its first block");
+      assertEquals(10L, thinking.inputTokens(), "usage is recorded once, on the first block");
       assertNull(messages.get(4).inputTokens());
       assertEquals("Bash", messages.get(5).toolName());
       assertEquals("a.txt", store.content(messages.get(6).contentHash()).orElseThrow());
@@ -149,6 +149,83 @@ class RecorderTest {
       assertEquals(
           List.of("main", "main", "main", "abc123"),
           messages.stream().map(MessageRecord::agentId).toList());
+    }
+  }
+
+  /** One line of an API message, the way Claude Code writes it: a single block, the usage repeated. */
+  private static String messageLine(String messageId, String block, int inputTokens) {
+    return "{\"type\":\"assistant\",\"timestamp\":\"2026-10-07T01:00:05.000Z\",\"message\":{\"id\":\"" + messageId
+        + "\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":" + inputTokens + ",\"output_tokens\":20},"
+        + "\"content\":[" + block + "]}}";
+  }
+
+  @Test
+  void countsTheTokensOfAMessageOnceHoweverManyLinesItSpans(@TempDir Path dir) throws IOException {
+    String thinking = "{\"type\":\"thinking\",\"thinking\":\"let me think\"}";
+    String text = "{\"type\":\"text\",\"text\":\"answer\"}";
+    String toolUse = "{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{}}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(
+        transcript, PROMPT + "\n" + messageLine("m1", thinking, 10) + "\n" + messageLine("m1", text, 10) + "\n");
+
+    try (RecordStore store = store(dir)) {
+      // Thinking is left out, so the message's usage lands on the first block that is recorded.
+      Ingester ingester = ingester(store, false);
+      ingester.ingestSession(transcript, SESSION, ALICE);
+      // The same message goes on in a later run, and another one follows it.
+      Files.writeString(
+          transcript,
+          messageLine("m1", toolUse, 10) + "\n" + messageLine("m2", text, 7) + "\n",
+          StandardOpenOption.APPEND);
+      ingester.ingestSession(transcript, SESSION, ALICE);
+
+      List<MessageRecord> messages = store.messages(SESSION);
+      assertEquals(
+          List.of("user_prompt", "assistant_text", "tool_use", "assistant_text"),
+          messages.stream().map(MessageRecord::kind).toList());
+      assertEquals(java.util.Arrays.asList(null, "m1", "m1", "m2"), messages.stream().map(MessageRecord::messageId).toList());
+      assertEquals(
+          java.util.Arrays.asList(null, 10L, null, 7L),
+          messages.stream().map(MessageRecord::inputTokens).toList());
+    }
+  }
+
+  @Test
+  void aSessionIsRecordedWithItsFirstLinesEvenIfTheRunFailsLater(@TempDir Path dir) throws IOException {
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    // More than one batch of lines; the title comes in the last one.
+    Files.writeString(transcript, PROMPT + "\n" + (RESULT + "\n").repeat(60) + TITLE + "\n");
+
+    try (RecordStore store = store(dir)) {
+      int[] batches = {0};
+      RecordStore failing =
+          (RecordStore)
+              java.lang.reflect.Proxy.newProxyInstance(
+                  RecordStore.class.getClassLoader(),
+                  new Class<?>[] {RecordStore.class},
+                  (proxy, method, args) -> {
+                    if (method.getName().equals("writeBatch") && ++batches[0] == 2) {
+                      throw new IllegalStateException("the database went away");
+                    }
+                    return method.invoke(store, args);
+                  });
+      try {
+        ingester(failing, true).ingestSession(transcript, SESSION, ALICE);
+        org.junit.jupiter.api.Assertions.fail("the second batch should have failed");
+      } catch (IllegalStateException expected) {
+        // The first batch is committed, the rest is not.
+      }
+      SessionRecord partial = store.sessions("acct-alice", 10).get(0);
+      assertEquals("/work/app", partial.projectPath());
+      assertNull(partial.title());
+      assertEquals(SESSION, store.sessionsByDay("org-1", 20261007, 10).get(0).sessionId());
+
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      SessionRecord whole = store.sessions("acct-alice", 10).get(0);
+      assertEquals("/work/app", whole.projectPath(), "what an earlier run recorded is kept");
+      assertEquals("Recording design", whole.title());
+      assertEquals(61, store.messages(SESSION).size());
+      assertEquals(1, store.sessions("acct-alice", 10).size());
     }
   }
 

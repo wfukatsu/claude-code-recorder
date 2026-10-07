@@ -55,6 +55,7 @@ public final class TranscriptParser {
       Long ts,
       String uuid,
       String parentUuid,
+      String messageId,
       String cwd,
       String gitBranch,
       String version,
@@ -74,6 +75,7 @@ public final class TranscriptParser {
     }
     String type = node.path("type").asText("");
     List<Block> blocks = new ArrayList<>();
+    String messageId = null;
     String model = null;
     String title = null;
     Usage usage = null;
@@ -81,6 +83,7 @@ public final class TranscriptParser {
       case "user" -> userBlocks(node, blocks);
       case "assistant" -> {
         JsonNode message = node.path("message");
+        messageId = textOrNull(message.path("id"));
         model = textOrNull(message.path("model"));
         usage = usage(message.path("usage"));
         assistantBlocks(message.path("content"), blocks);
@@ -102,6 +105,7 @@ public final class TranscriptParser {
         timestamp(node.path("timestamp")),
         textOrNull(node.path("uuid")),
         textOrNull(node.path("parentUuid")),
+        messageId,
         textOrNull(node.path("cwd")),
         textOrNull(node.path("gitBranch")),
         textOrNull(node.path("version")),
@@ -233,6 +237,6 @@ public final class TranscriptParser {
   }
 
   private static Line bare(List<Block> blocks) {
-    return new Line(blocks, null, null, null, null, null, null, null, null, null);
+    return new Line(blocks, null, null, null, null, null, null, null, null, null, null);
   }
 }

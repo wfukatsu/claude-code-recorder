@@ -41,6 +41,7 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 
 - 記録元は Claude Code が書くトランスクリプト（`~/.claude/projects/**/<session>.jsonl` とサブエージェント分）です。
 - 取り込みは差分かつ冪等です。キーをファイル上の位置から決めるので、何度取り込んでも重複しません。
+- 取り込めないキューが 1 件あっても、ほかのセッションは記録されます。読めないキューは `spool/*.json.bad` に退避されます。
 - トランスクリプトの形式は Claude Code の内部仕様で、バージョンで変わります。未知のレコードは `unknown` として丸ごと保存します。
 
 ### アカウントの決め方（優先順）
@@ -58,11 +59,13 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 | `accounts` | `account_id` | – | メール、表示名、組織 |
 | `sessions` | `account_id` | `started_at` 降順, `session_id` | プロジェクト、ブランチ、モデル、タイトル |
 | `sessions_by_day` | `org_id`, `day` | `started_at`, `session_id` | 組織 × 日の索引 |
-| `messages` | `session_id` | `agent_id`, `line_no`, `block_no` | 種別、ツール名、トークン数、本文のハッシュと先頭 1,000 文字 |
+| `messages` | `session_id` | `agent_id`, `line_no`, `block_no` | 種別、ツール名、`message_id`、トークン数、本文のハッシュと先頭 1,000 文字 |
 | `contents` | `content_hash` | `chunk_no` | 本文（gzip、6,000 バイト以下のチャンク） |
 | `ingest_state` | `host_id` | `source_path_hash` | 取り込み済みの位置 |
 
 `messages.kind` は `user_prompt` / `user_meta` / `assistant_text` / `thinking` / `tool_use` / `tool_result` / `system_prompt` / `tool_definitions` / `context` / `system` / `unknown` です。
+
+Claude Code は 1 回の API 応答をブロックごとの複数行に分けて書き、どの行にも同じトークン数を付けます。トークン数は `message_id` ごとに最初の 1 行にだけ記録するので、そのまま合計できます。
 
 本文は SHA-256 で内容アドレス化しているので、セッションをまたいで同じシステムプロンプトや CLAUDE.md は 1 件にまとまります。
 
@@ -75,7 +78,7 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 | `recordThinking` | `true` | thinking ブロックを記録する |
 | `redact` | `true` | 保存前に既知の形式の認証情報（API キー、トークン、秘密鍵）を伏せる |
 
-記録の除外: 環境変数 `CCREC_DISABLE=1`、またはプロジェクト直下に `.ccrec-ignore` を置く。
+記録の除外: 環境変数 `CCREC_DISABLE=1`、またはプロジェクト直下に `.ccrec-ignore` を置く。`.ccrec-ignore` はその配下のどのディレクトリで作業していても効き、一度該当したセッションは最後まで記録されません（`ccrec import` も同じファイルを見ます）。
 
 ## データベースを切り替える
 

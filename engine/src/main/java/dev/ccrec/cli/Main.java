@@ -1,5 +1,6 @@
 package dev.ccrec.cli;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
@@ -12,6 +13,7 @@ import dev.ccrec.redact.Redactor;
 import dev.ccrec.store.RecordStore;
 import dev.ccrec.store.ScalarDbRecordStore;
 import dev.ccrec.sync.Syncer;
+import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PrintStream;
@@ -21,6 +23,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -64,11 +67,15 @@ public final class Main {
       System.err.println("ccrec: " + e.getMessage());
       System.exit(2);
     } catch (Exception e) {
-      System.err.println("ccrec: " + e);
-      for (Throwable cause = e.getCause(); cause != null; cause = cause.getCause()) {
-        System.err.println("  caused by: " + cause);
-      }
+      printError(null, e);
       System.exit(1);
+    }
+  }
+
+  private static void printError(String what, Exception e) {
+    System.err.println("ccrec: " + (what == null ? "" : what + ": ") + e);
+    for (Throwable cause = e.getCause(); cause != null; cause = cause.getCause()) {
+      System.err.println("  caused by: " + cause);
     }
   }
 
@@ -122,6 +129,7 @@ public final class Main {
       return 0;
     }
     String only = options.get("session");
+    int failed = 0;
     try (FileChannel lockChannel = openLock();
         FileLock lock = acquire(lockChannel)) {
       if (lock == null) {
@@ -131,27 +139,47 @@ public final class Main {
       try (RecordStore store = openStore()) {
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(spool, "*.json")) {
           for (Path entry : entries) {
-            JsonNode queued = JSON.readTree(Files.readString(entry));
-            String sessionId = queued.path("session_id").asText("");
-            if (sessionId.isEmpty() || (only != null && !only.equals(sessionId))) {
+            // The hook names an entry after its session, so the others need not even be read.
+            if (only != null && !entry.getFileName().toString().equals(only + ".json")) {
               continue;
             }
-            Path transcript = Path.of(queued.path("transcript_path").asText(""));
-            if (!Files.isRegularFile(transcript)) {
-              continue;
-            }
-            Ingester ingester = ingester(store, queued.path("host_id").asText("unknown-host"));
-            Ingester.Summary summary =
-                ingester.ingestSession(transcript, sessionId, account(queued.path("account")));
-            report(summary);
-            if (queued.path("ended").asBoolean(false)) {
-              Files.deleteIfExists(entry);
+            // One entry that cannot be ingested must not keep the sessions after it from being recorded.
+            try {
+              ingestQueued(store, entry);
+            } catch (JsonProcessingException | UsageException e) {
+              // It will never read any better: set it aside rather than fail on it at every hook.
+              failed++;
+              printError(entry.getFileName() + " is malformed, set aside as .bad", e);
+              Files.move(
+                  entry,
+                  entry.resolveSibling(entry.getFileName() + ".bad"),
+                  StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException | RuntimeException e) {
+              failed++;
+              printError(entry.getFileName() + " stays queued", e);
             }
           }
         }
       }
     }
-    return 0;
+    return failed == 0 ? 0 : 1;
+  }
+
+  private void ingestQueued(RecordStore store, Path entry) throws IOException {
+    JsonNode queued = JSON.readTree(Files.readString(entry));
+    String sessionId = queued.path("session_id").asText("");
+    if (sessionId.isEmpty()) {
+      throw new UsageException("the entry has no session_id");
+    }
+    Path transcript = Path.of(queued.path("transcript_path").asText(""));
+    if (!Files.isRegularFile(transcript)) {
+      return;
+    }
+    Ingester ingester = ingester(store, queued.path("host_id").asText("unknown-host"));
+    report(ingester.ingestSession(transcript, sessionId, account(queued.path("account"))));
+    if (queued.path("ended").asBoolean(false)) {
+      Files.deleteIfExists(entry);
+    }
   }
 
   /** Ingests transcript files or directories directly, under the caller's identity. */
@@ -173,6 +201,7 @@ public final class Main {
         throw new UsageException("no such transcript: " + argument);
       }
     }
+    int failed = 0;
     try (FileChannel lockChannel = openLock();
         FileLock lock = acquire(lockChannel)) {
       if (lock == null) {
@@ -182,13 +211,51 @@ public final class Main {
         Ingester ingester = ingester(store, identity.path("host_id").asText("unknown-host"));
         Account account = account(identity.path("account"));
         for (Path transcript : transcripts) {
-          String name = transcript.getFileName().toString();
-          String sessionId = Account.keySafe(name.substring(0, name.length() - ".jsonl".length()));
-          report(ingester.ingestSession(transcript, sessionId, account));
+          try {
+            if (optedOut(transcript)) {
+              out.printf("%s  skipped: its project carries .ccrec-ignore%n", transcript.getFileName());
+              continue;
+            }
+            String name = transcript.getFileName().toString();
+            String sessionId = Account.keySafe(name.substring(0, name.length() - ".jsonl".length()));
+            report(ingester.ingestSession(transcript, sessionId, account));
+          } catch (IOException | RuntimeException e) {
+            failed++;
+            printError(transcript + " was not imported", e);
+          }
         }
       }
     }
-    return 0;
+    return failed == 0 ? 0 : 1;
+  }
+
+  /**
+   * Whether the directory the session started in, or one above it, carries {@code .ccrec-ignore} —
+   * the same opt-out the hook honours.
+   */
+  private static boolean optedOut(Path transcript) throws IOException {
+    try (BufferedReader reader = Files.newBufferedReader(transcript, StandardCharsets.UTF_8)) {
+      String raw;
+      // The working directory is on the first conversation line; bookkeeping lines come before it.
+      for (int read = 0; read < 200 && (raw = reader.readLine()) != null; read++) {
+        JsonNode cwd;
+        try {
+          cwd = raw.isBlank() ? null : JSON.readTree(raw).path("cwd");
+        } catch (JsonProcessingException e) {
+          continue;
+        }
+        if (cwd == null || !cwd.isTextual()) {
+          continue;
+        }
+        for (Path dir = Path.of(cwd.asText()); dir != null; dir = dir.getParent()) {
+          if (Files.exists(dir.resolve(".ccrec-ignore"))) {
+            return true;
+          }
+        }
+        return false;
+      }
+    }
+    return false;
   }
 
   private void report(Ingester.Summary summary) {

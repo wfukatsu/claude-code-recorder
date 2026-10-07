@@ -99,14 +99,40 @@ test('the hook records nothing when disabled, opted out, or handed garbage', asy
   const event = { session_id: 'sess-2', transcript_path: '/tmp/x.jsonl', hook_event_name: 'Stop' };
 
   await withEnv({ ...noAdmin, CCREC_HOME: home, CCREC_NO_INGEST: '1' }, async () => {
-    assert.equal(await runHook(JSON.stringify({ ...event, cwd: project })), 0);
     assert.equal(await runHook('not json'), 0);
     assert.equal(await runHook(JSON.stringify({ ...event, session_id: '../escape' })), 0);
     assert.equal(fs.existsSync(spool) ? fs.readdirSync(spool).length : 0, 0);
+    assert.equal(await runHook(JSON.stringify({ ...event, cwd: project })), 0);
+    assert.deepEqual(fs.readdirSync(spool), ['sess-2.ignored']);
   });
   await withEnv({ ...noAdmin, CCREC_HOME: home, CCREC_NO_INGEST: '1', CCREC_DISABLE: '1' }, async () => {
-    assert.equal(await runHook(JSON.stringify(event)), 0);
-    assert.equal(fs.existsSync(spool) ? fs.readdirSync(spool).length : 0, 0);
+    assert.equal(await runHook(JSON.stringify({ ...event, session_id: 'sess-3' })), 0);
+    assert.deepEqual(fs.readdirSync(spool), ['sess-2.ignored']);
+  });
+});
+
+test('an opt-out covers the whole project and the whole session', async () => {
+  const home = scratch();
+  const project = scratch();
+  const elsewhere = scratch();
+  fs.writeFileSync(path.join(project, '.ccrec-ignore'), '');
+  fs.mkdirSync(path.join(project, 'src', 'deep'), { recursive: true });
+  const spool = path.join(home, 'spool');
+  const event = (session, cwd) =>
+    JSON.stringify({ session_id: session, transcript_path: '/tmp/x.jsonl', cwd, hook_event_name: 'Stop' });
+
+  await withEnv({ ...noAdmin, CCREC_HOME: home, CCREC_NO_INGEST: '1' }, async () => {
+    // Below the directory that carries the file.
+    await runHook(event('sess-a', path.join(project, 'src', 'deep')));
+    // The session then moves out of the project: its transcript still holds the project's exchanges.
+    await runHook(event('sess-a', elsewhere));
+    assert.deepEqual(fs.readdirSync(spool), ['sess-a.ignored']);
+
+    // A session queued elsewhere that enters the project is taken back off the queue.
+    await runHook(event('sess-b', elsewhere));
+    assert.ok(fs.existsSync(path.join(spool, 'sess-b.json')));
+    await runHook(event('sess-b', project));
+    assert.deepEqual(fs.readdirSync(spool).sort(), ['sess-a.ignored', 'sess-b.ignored']);
   });
 });
 
