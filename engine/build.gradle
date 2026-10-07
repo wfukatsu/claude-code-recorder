@@ -1,0 +1,65 @@
+plugins {
+    id 'java'
+    id 'com.gradleup.shadow' version '9.6.1'
+}
+
+group = 'dev.ccrec'
+version = '0.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+repositories {
+    mavenCentral()
+}
+
+// ScalarDB depends on every adapter's client at once (~165 MB). The default build keeps what the
+// JDBC adapter needs for SQLite, PostgreSQL and MariaDB; -Pfull keeps everything, for a deployment
+// that points the same code at DynamoDB, Cosmos DB, Cassandra, Oracle, SQL Server, Db2 or Spanner.
+def fullBuild = project.hasProperty('full')
+def adapterClientGroups = [
+    'software.amazon.awssdk', 'software.amazon.awssdk.crt', 'software.amazon.eventstream',
+    'software.amazon.jdbc', 'com.azure', 'com.google.cloud', 'com.google.cloud.opentelemetry',
+    'com.google.api', 'com.google.api.grpc', 'com.google.apis', 'com.google.api-client',
+    'com.google.http-client', 'com.google.auth', 'com.google.oauth-client', 'com.google.crypto.tink',
+    'io.grpc', 'io.netty', 'io.projectreactor', 'io.projectreactor.netty', 'io.opencensus',
+    'io.opentelemetry', 'io.opentelemetry.contrib', 'io.opentelemetry.semconv',
+    'org.apache.cassandra', 'com.github.jnr', 'org.bouncycastle', 'org.conscrypt',
+    'org.apache.httpcomponents', 'org.apache.httpcomponents.core5',
+    'org.apache.httpcomponents.client5', 'com.oracle.database.jdbc', 'com.ibm.db2',
+    'com.microsoft.sqlserver', 'com.yugabyte',
+]
+if (!fullBuild) {
+    // Tests run on the same reduced classpath the published JAR has.
+    [configurations.runtimeClasspath, configurations.testRuntimeClasspath].each { conf ->
+        adapterClientGroups.each { conf.exclude group: it }
+    }
+}
+
+dependencies {
+    implementation 'com.scalar-labs:scalardb:3.19.1'
+    // Pinned to the versions ScalarDB 3.19.1 itself resolves, so the fat JAR carries one copy.
+    implementation 'com.fasterxml.jackson.core:jackson-databind:2.18.7'
+    runtimeOnly 'org.slf4j:slf4j-nop:1.7.36'
+
+    testImplementation platform('org.junit:junit-bom:6.1.3')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+test {
+    useJUnitPlatform()
+}
+
+shadowJar {
+    archiveFileName = fullBuild ? 'ccrec-engine-full.jar' : 'ccrec-engine.jar'
+    zip64 = true
+    destinationDirectory = file("$rootDir/../lib")
+    // ScalarDB finds its storage adapters, and JDBC its drivers, through ServiceLoader.
+    mergeServiceFiles()
+    manifest {
+        attributes 'Main-Class': 'dev.ccrec.cli.Main'
+    }
+}
