@@ -12,7 +12,7 @@ Claude Code でのやりとり（ユーザープロンプト、システムプ�
 ```bash
 npm install -g <このリポジトリ、または npm pack で作った .tgz>
 ccrec init            # ~/.ccrec を作成（SQLite 用の設定つき）
-ccrec doctor          # Java・エンジン・設定・フックの確認
+ccrec doctor          # Java・エンジン・設定・フック・未記録セッションの確認
 ccrec install-hooks   # ~/.claude/settings.json に記録用フックを追加
 ```
 
@@ -41,6 +41,7 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 
 - 記録元は Claude Code が書くトランスクリプト（`~/.claude/projects/**/<session>.jsonl` とサブエージェント分）です。
 - 取り込みは差分かつ冪等です。キーをファイル上の位置から決めるので、何度取り込んでも重複しません。
+- 取り込みが走らなかった、または途中で終わったセッション（Java が見つからない、ロック待ちの時間切れなど）は、次にどれかのセッションのフックが動いたときにまとめて記録されます。10 分以上記録されないままのセッションがあると `ccrec doctor` が `FAIL` を返すので、`ccrec ingest` で取り込み直してください。
 - 取り込めないキューが 1 件あっても、ほかのセッションは記録されます。読めないキューは `spool/*.json.bad` に退避されます。
 - トランスクリプトの形式は Claude Code の内部仕様で、バージョンで変わります。未知のレコードは `unknown` として丸ごと保存します。
 

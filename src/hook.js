@@ -46,6 +46,7 @@ export async function runHook(input) {
       home = ensureHome();
       fs.writeFileSync(ignored, '', { mode: 0o600 });
       fs.rmSync(file, { force: true });
+      fs.rmSync(path.join(spool, `${sessionId}.done`), { force: true });
       return 0;
     }
 
@@ -58,6 +59,7 @@ export async function runHook(input) {
     }
     // The account is fixed at the first event seen for a session and kept for its lifetime.
     const identity = queued.account ? { host_id: queued.host_id, account: queued.account } : resolveIdentity();
+    const now = new Date().toISOString();
     const entry = {
       session_id: sessionId,
       transcript_path: event.transcript_path,
@@ -65,7 +67,9 @@ export async function runHook(input) {
       host_id: identity.host_id,
       account: identity.account,
       ended: event.hook_event_name === 'SessionEnd',
-      updated_at: new Date().toISOString(),
+      updated_at: now,
+      // Compared with the engine's <session>.done mark: later than it means not yet recorded.
+      ingest_requested_at: INGEST_ON.has(event.hook_event_name) ? now : (queued.ingest_requested_at ?? null),
     };
     const temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(entry), { mode: 0o600 });

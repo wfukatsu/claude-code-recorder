@@ -25,9 +25,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
+import java.nio.file.attribute.FileTime;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -46,6 +49,7 @@ public final class Main {
   private static final DateTimeFormatter TIME =
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
   private static final long LOCK_WAIT_MILLIS = 60_000;
+  private static final Duration QUEUE_RETENTION = Duration.ofDays(30);
 
   private final Path home;
   private final Path config;
@@ -122,7 +126,11 @@ public final class Main {
 
   // ---- write commands -------------------------------------------------------------------------
 
-  /** Ingests every session the hooks queued under {@code spool/}. */
+  /**
+   * Ingests what the hooks queued under {@code spool/}: every session, or with {@code --session} that
+   * one and any other whose ingest was requested and has not succeeded since — so a run that was cut
+   * short, timed out on the lock or could not start is made up for by the next one.
+   */
   private int ingest() throws IOException {
     Path spool = home.resolve("spool");
     if (!Files.isDirectory(spool)) {
@@ -133,19 +141,15 @@ public final class Main {
     try (FileChannel lockChannel = openLock();
         FileLock lock = acquire(lockChannel)) {
       if (lock == null) {
-        // Another ingest holds the store; the session stays queued for the next hook.
+        // Another ingest holds the store; the session stays waiting and a later run takes it.
         return 0;
       }
       try (RecordStore store = openStore()) {
         try (DirectoryStream<Path> entries = Files.newDirectoryStream(spool, "*.json")) {
           for (Path entry : entries) {
-            // The hook names an entry after its session, so the others need not even be read.
-            if (only != null && !entry.getFileName().toString().equals(only + ".json")) {
-              continue;
-            }
             // One entry that cannot be ingested must not keep the sessions after it from being recorded.
             try {
-              ingestQueued(store, entry);
+              ingestQueued(store, entry, only);
             } catch (JsonProcessingException | UsageException e) {
               // It will never read any better: set it aside rather than fail on it at every hook.
               failed++;
@@ -165,20 +169,54 @@ public final class Main {
     return failed == 0 ? 0 : 1;
   }
 
-  private void ingestQueued(RecordStore store, Path entry) throws IOException {
+  private void ingestQueued(RecordStore store, Path entry, String only) throws IOException {
+    // Taken before the entry is read: an event the hook queues from here on is still waiting afterwards.
+    Instant started = Instant.now();
     JsonNode queued = JSON.readTree(Files.readString(entry));
     String sessionId = queued.path("session_id").asText("");
     if (sessionId.isEmpty()) {
       throw new UsageException("the entry has no session_id");
     }
-    Path transcript = Path.of(queued.path("transcript_path").asText(""));
-    if (!Files.isRegularFile(transcript)) {
+    String name = entry.getFileName().toString();
+    Path done = entry.resolveSibling(name.substring(0, name.length() - ".json".length()) + ".done");
+    if (only != null && !only.equals(sessionId) && !waiting(queued, done)) {
+      // Up to date. A session that never ended (a crash, a closed laptop) would otherwise stay forever.
+      if (Files.getLastModifiedTime(entry).toInstant().isBefore(started.minus(QUEUE_RETENTION))) {
+        Files.deleteIfExists(entry);
+        Files.deleteIfExists(done);
+      }
       return;
     }
-    Ingester ingester = ingester(store, queued.path("host_id").asText("unknown-host"));
-    report(ingester.ingestSession(transcript, sessionId, account(queued.path("account"))));
+    Path transcript = Path.of(queued.path("transcript_path").asText(""));
+    if (Files.isRegularFile(transcript)) {
+      Ingester ingester = ingester(store, queued.path("host_id").asText("unknown-host"));
+      report(ingester.ingestSession(transcript, sessionId, account(queued.path("account"))));
+    }
     if (queued.path("ended").asBoolean(false)) {
       Files.deleteIfExists(entry);
+      Files.deleteIfExists(done);
+    } else {
+      // The mark of success `ccrec doctor` and the next run compare the hook's requests against.
+      if (!Files.exists(done)) {
+        Files.createFile(done);
+      }
+      Files.setLastModifiedTime(done, FileTime.from(started));
+    }
+  }
+
+  /** Whether the hook asked for this session to be ingested after its last successful ingest. */
+  private static boolean waiting(JsonNode queued, Path done) throws IOException {
+    String requested = queued.path("ingest_requested_at").asText("");
+    if (requested.isEmpty()) {
+      return false;
+    }
+    if (!Files.exists(done)) {
+      return true;
+    }
+    try {
+      return Instant.parse(requested).isAfter(Files.getLastModifiedTime(done).toInstant());
+    } catch (DateTimeParseException e) {
+      return true;
     }
   }
 

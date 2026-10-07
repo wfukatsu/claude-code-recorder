@@ -11,6 +11,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Properties;
 import org.junit.jupiter.api.Test;
@@ -45,11 +48,20 @@ class MainTest {
     }
   }
 
-  private static void queue(Path home, String sessionId, Path transcript) throws IOException {
+  /** A spool entry as the hook writes it; {@code requestedAt} is null when no ingest was asked for. */
+  private static void queue(Path home, String sessionId, Path transcript, boolean ended, String requestedAt)
+      throws IOException {
     Files.writeString(
         home.resolve("spool").resolve(sessionId + ".json"),
         "{\"session_id\":\"" + sessionId + "\",\"transcript_path\":\"" + transcript + "\",\"host_id\":\"host-1\","
-            + "\"account\":{\"account_id\":\"acct-1\"},\"ended\":true}");
+            + "\"account\":{\"account_id\":\"acct-1\"},\"ended\":" + ended + ",\"ingest_requested_at\":"
+            + (requestedAt == null ? "null" : "\"" + requestedAt + "\"") + "}");
+  }
+
+  private static Path transcript(Path dir, String sessionId) throws IOException {
+    Path transcript = dir.resolve(sessionId + ".jsonl");
+    Files.writeString(transcript, String.format(LINE, "/work/app"));
+    return transcript;
   }
 
   @Test
@@ -61,7 +73,7 @@ class MainTest {
     // Whatever order the directory lists them in, a bad entry comes before the good one.
     Files.writeString(spool.resolve("000.json"), "{broken");
     Files.writeString(spool.resolve("zzz.json"), "{\"session_id\":\"zzz\",\"transcript_path\":\"" + transcript + "\"}");
-    queue(home, "good", transcript);
+    queue(home, "good", transcript, true, null);
 
     assertEquals(1, Main.run(new String[] {"ingest", "--home", home.toString()}));
 
@@ -73,15 +85,38 @@ class MainTest {
   }
 
   @Test
-  void ingestingOneSessionDoesNotReadTheOtherEntries(@TempDir Path dir) throws IOException {
+  void aHookRunAlsoRecordsTheSessionsAnEarlierRunLeftWaiting(@TempDir Path dir) throws IOException {
     Path home = home(dir);
-    Path transcript = dir.resolve("good.jsonl");
-    Files.writeString(transcript, String.format(LINE, "/work/app"));
-    Files.writeString(home.resolve("spool").resolve("000.json"), "{broken");
-    queue(home, "good", transcript);
+    Path spool = home.resolve("spool");
+    String now = Instant.now().toString();
+    queue(home, "current", transcript(dir, "current"), false, now);
+    // Its own ingest never got to run: Java was missing, or the lock wait timed out.
+    queue(home, "missed", transcript(dir, "missed"), true, now);
+    // Only started; nothing has asked for it to be recorded.
+    queue(home, "idle", transcript(dir, "idle"), false, null);
+    // Recorded since its last request, and untouched for longer than the queue keeps entries.
+    queue(home, "stale", transcript(dir, "stale"), false, "2026-01-01T00:00:00.000Z");
+    Files.createFile(spool.resolve("stale.done"));
+    Files.setLastModifiedTime(spool.resolve("stale.json"), FileTime.from(Instant.now().minus(Duration.ofDays(31))));
 
-    assertEquals(0, Main.run(new String[] {"ingest", "--session", "good", "--home", home.toString()}));
-    assertEquals(1, sessions(home).size());
-    assertTrue(Files.exists(home.resolve("spool").resolve("000.json")));
+    assertEquals(0, Main.run(new String[] {"ingest", "--session", "current", "--home", home.toString()}));
+
+    assertEquals(
+        List.of("current", "missed"), sessions(home).stream().map(SessionRecord::sessionId).sorted().toList());
+    assertTrue(Files.exists(spool.resolve("current.done")), "a session still open is marked as recorded");
+    assertFalse(Files.exists(spool.resolve("missed.json")), "an ended session leaves the queue");
+    assertTrue(Files.exists(spool.resolve("idle.json")));
+    assertFalse(Files.exists(spool.resolve("stale.json")), "an entry long recorded and idle is dropped");
+    assertFalse(Files.exists(spool.resolve("stale.done")));
+
+    // Nothing was requested since: another session's run leaves this one alone.
+    FileTime marked = Files.getLastModifiedTime(spool.resolve("current.done"));
+    assertEquals(0, Main.run(new String[] {"ingest", "--session", "other", "--home", home.toString()}));
+    assertEquals(marked, Files.getLastModifiedTime(spool.resolve("current.done")));
+
+    // The hook asks again; whichever session's run comes next records it.
+    queue(home, "current", transcript(dir, "current"), false, Instant.now().plusSeconds(1).toString());
+    assertEquals(0, Main.run(new String[] {"ingest", "--session", "other", "--home", home.toString()}));
+    assertTrue(Files.getLastModifiedTime(spool.resolve("current.done")).compareTo(marked) > 0);
   }
 }

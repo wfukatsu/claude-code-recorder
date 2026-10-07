@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { runHook } from '../src/hook.js';
 import { resolveIdentity } from '../src/identity.js';
 import { HOOK_EVENTS, hooksInstalled, installHooks, uninstallHooks } from '../src/install.js';
+import { queueStatus } from '../src/queue.js';
 
 function scratch() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'ccrec-test-'));
@@ -133,6 +134,38 @@ test('an opt-out covers the whole project and the whole session', async () => {
     assert.ok(fs.existsSync(path.join(spool, 'sess-b.json')));
     await runHook(event('sess-b', project));
     assert.deepEqual(fs.readdirSync(spool).sort(), ['sess-a.ignored', 'sess-b.ignored']);
+  });
+});
+
+test('a session waits in the queue from the hook that asks for it until an ingest records it', async () => {
+  const home = scratch();
+  const spool = path.join(home, 'spool');
+  const event = (session, name) =>
+    JSON.stringify({ session_id: session, transcript_path: '/tmp/x.jsonl', cwd: home, hook_event_name: name });
+  assert.deepEqual(queueStatus(home), { waiting: 0, oldest: null, unreadable: 0 });
+
+  await withEnv({ ...noAdmin, CCREC_HOME: home, CCREC_NO_INGEST: '1' }, async () => {
+    // Starting a session asks for nothing yet.
+    await runHook(event('sess-a', 'SessionStart'));
+    assert.equal(queueStatus(home).waiting, 0);
+
+    const before = Date.now();
+    await runHook(event('sess-a', 'Stop'));
+    await runHook(event('sess-b', 'Stop'));
+    const status = queueStatus(home);
+    assert.equal(status.waiting, 2);
+    assert.ok(status.oldest >= before && status.oldest <= Date.now());
+
+    // The engine marks a recorded session; an event that does not ask again keeps it recorded.
+    const mark = path.join(spool, 'sess-a.done');
+    fs.writeFileSync(mark, '');
+    fs.utimesSync(mark, new Date(Date.now() + 1000), new Date(Date.now() + 1000));
+    await runHook(event('sess-a', 'SessionStart'));
+    assert.equal(queueStatus(home).waiting, 1);
+
+    fs.writeFileSync(path.join(spool, 'broken.json'), '{broken');
+    fs.writeFileSync(path.join(spool, 'older.json.bad'), '{broken');
+    assert.equal(queueStatus(home).unreadable, 2);
   });
 });
 
