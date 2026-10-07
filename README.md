@@ -77,7 +77,12 @@ Claude Code は 1 回の API 応答をブロックごとの複数行に分けて
 | キー | 既定 | 意味 |
 |---|---|---|
 | `recordThinking` | `true` | thinking ブロックを記録する |
-| `redact` | `true` | 保存前に既知の形式の認証情報（API キー、トークン、秘密鍵）を伏せる |
+| `redact` | `true` | 保存前に既知の形式の認証情報を `[REDACTED]` に置き換える（下記） |
+
+伏せる対象は次の 2 種類です。誤って伏せないことを優先しているので、これ以外の形の認証情報は残ります。
+
+- 接頭辞で見分けられるトークン: Anthropic / OpenAI / AWS アクセスキー ID / GitHub / GitLab / Slack / Google / Stripe / npm / Hugging Face / SendGrid、JWT、PEM 形式の秘密鍵
+- 置かれた場所で見分けられる値（値だけを伏せ、前後は残します）: URL 内のパスワード（`postgres://app:[REDACTED]@host/db`）、`Authorization` ヘッダーと `Bearer` の値、Azure の `AccountKey=`、名前が秘密を示す大文字の代入（`DB_PASSWORD=`、`AWS_SECRET_ACCESS_KEY=`、`GITHUB_TOKEN=` など）
 
 記録の除外: 環境変数 `CCREC_DISABLE=1`、またはプロジェクト直下に `.ccrec-ignore` を置く。`.ccrec-ignore` はその配下のどのディレクトリで作業していても効き、一度該当したセッションは最後まで記録されません（`ccrec import` も同じファイルを見ます）。
 
