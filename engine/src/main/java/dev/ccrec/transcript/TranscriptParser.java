@@ -13,8 +13,10 @@ import java.util.Set;
  * Turns one line of a Claude Code transcript (JSONL) into content blocks.
  *
  * <p>The transcript format is internal to Claude Code and changes between versions, so nothing here
- * fails on an unexpected shape: a record type this parser does not know is kept whole as an
- * {@code unknown} block, to be re-read once a parser for it exists.
+ * fails on an unexpected shape: a record type this parser does not know, or a known one that does
+ * not look the way it is read here, is kept whole as an {@code unknown} block, to be re-read once a
+ * parser for it exists. Only a record with nothing in it to keep — an empty text, a thinking block
+ * that carries a signature and no text — leaves no block.
  */
 public final class TranscriptParser {
 
@@ -80,18 +82,37 @@ public final class TranscriptParser {
     String title = null;
     Usage usage = null;
     switch (type) {
-      case "user" -> userBlocks(node, blocks);
+      case "user" -> {
+        JsonNode content = node.path("message").path("content");
+        if (content.isTextual() || content.isArray()) {
+          userBlocks(node, content, blocks);
+        } else {
+          blocks.add(new Block(UNKNOWN, type, raw, null, null));
+        }
+      }
       case "assistant" -> {
         JsonNode message = node.path("message");
         messageId = textOrNull(message.path("id"));
         model = textOrNull(message.path("model"));
         usage = usage(message.path("usage"));
-        assistantBlocks(message.path("content"), blocks);
+        if (message.path("content").isArray()) {
+          assistantBlocks(message.path("content"), blocks);
+        } else {
+          blocks.add(new Block(UNKNOWN, type, raw, null, null));
+        }
       }
-      case "attachment" -> attachmentBlocks(node.path("attachment"), blocks);
+      case "attachment" -> {
+        if (node.path("attachment").isObject()) {
+          attachmentBlocks(node.path("attachment"), blocks);
+        } else {
+          blocks.add(new Block(UNKNOWN, type, raw, null, null));
+        }
+      }
       case "system" -> {
-        JsonNode content = node.path("content");
-        add(blocks, SYSTEM, textOrNull(node.path("subtype")), stringify(content), null, null);
+        // Some subtypes (a turn's duration, a hook summary) say what they have to say in fields of
+        // their own rather than in content: those are kept as the whole record.
+        String content = stringify(node.path("content"));
+        add(blocks, SYSTEM, textOrNull(node.path("subtype")), content != null ? content : raw, null, null);
       }
       case "ai-title" -> title = textOrNull(node.path("aiTitle"));
       default -> {
@@ -114,9 +135,8 @@ public final class TranscriptParser {
         usage);
   }
 
-  private static void userBlocks(JsonNode node, List<Block> blocks) {
+  private static void userBlocks(JsonNode node, JsonNode content, List<Block> blocks) {
     String textKind = node.path("isMeta").asBoolean(false) ? USER_META : USER_PROMPT;
-    JsonNode content = node.path("message").path("content");
     if (content.isTextual()) {
       add(blocks, textKind, null, content.asText(), null, null);
       return;

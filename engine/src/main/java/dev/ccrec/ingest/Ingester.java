@@ -9,9 +9,12 @@ import dev.ccrec.redact.Redactor;
 import dev.ccrec.store.RecordStore;
 import dev.ccrec.sync.Syncer;
 import dev.ccrec.transcript.TranscriptParser;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
@@ -149,27 +152,9 @@ public final class Ingester {
     IngestState state =
         store.ingestState(hostId, pathHash).orElse(new IngestState(hostId, pathHash, absolute, 0, 0, null));
 
-    byte[] bytes;
-    long offset = state.offset();
+    long position = state.offset();
     int lineNo = state.lineNo();
     String usageMessageId = state.usageMessageId();
-    try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
-      if (channel.size() < offset) {
-        // The file was replaced by a shorter one: read it again from the start.
-        offset = 0;
-        lineNo = 0;
-        usageMessageId = null;
-      }
-      ByteBuffer buffer = ByteBuffer.allocate(Math.toIntExact(channel.size() - offset));
-      channel.position(offset);
-      while (buffer.hasRemaining() && channel.read(buffer) >= 0) {
-        // keep reading
-      }
-      bytes = new byte[buffer.position()];
-      buffer.flip().get(bytes);
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
-    }
 
     List<MessageRecord> batch = new ArrayList<>();
     Map<String, String> contents = new LinkedHashMap<>();
@@ -177,85 +162,103 @@ public final class Ingester {
     int batchChars = 0;
     int totalLines = 0;
     int totalMessages = 0;
-    int lineStart = 0;
 
-    for (int i = 0; i < bytes.length; i++) {
-      if (bytes[i] != '\n') {
-        continue;
+    try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+      if (channel.size() < position) {
+        // The file was replaced by a shorter one: read it again from the start.
+        position = 0;
+        lineNo = 0;
+        usageMessageId = null;
       }
-      String raw = new String(bytes, lineStart, i - lineStart, StandardCharsets.UTF_8).strip();
-      lineStart = i + 1;
-      lineNo++;
-      totalLines++;
-      batchLines++;
-      if (!raw.isEmpty()) {
-        TranscriptParser.Line line = parser.parse(raw);
-        if (meta != null) {
-          meta.observe(line);
+      // Read as a stream, a batch at a time: a first import can be a transcript of any size, and only
+      // the line being read and the batch being built are held in memory.
+      InputStream in = new BufferedInputStream(Channels.newInputStream(channel.position(position)), 1 << 16);
+      ByteArrayOutputStream pending = new ByteArrayOutputStream();
+      long read = position;
+      for (int next = in.read(); next >= 0; next = in.read()) {
+        read++;
+        if (next != '\n') {
+          pending.write(next);
+          continue;
         }
-        // One API message is written as several lines, each repeating its usage: it is recorded on
-        // the first block kept for the message, and on no later line of the same message.
-        TranscriptParser.Usage usage =
-            line.messageId() != null && line.messageId().equals(usageMessageId) ? null : line.usage();
-        int blockNo = 0;
-        for (TranscriptParser.Block block : line.blocks()) {
-          int thisBlock = blockNo++;
-          if (!recordThinking && block.kind().equals(TranscriptParser.THINKING)) {
-            continue;
+        // Whatever follows the last newline is a line Claude Code is still writing; it stays unread.
+        position = read;
+        String raw = pending.toString(StandardCharsets.UTF_8).strip();
+        pending.reset();
+        lineNo++;
+        totalLines++;
+        batchLines++;
+        if (!raw.isEmpty()) {
+          TranscriptParser.Line line = parser.parse(raw);
+          if (meta != null) {
+            meta.observe(line);
           }
-          String text = redactor.redact(block.text());
-          String hash = ContentCodec.hash(text);
-          if (contents.putIfAbsent(hash, text) == null) {
-            batchChars += text.length();
+          // One API message is written as several lines, each repeating its usage: it is recorded on
+          // the first block kept for the message, and on no later line of the same message.
+          TranscriptParser.Usage usage =
+              line.messageId() != null && line.messageId().equals(usageMessageId) ? null : line.usage();
+          int blockNo = 0;
+          for (TranscriptParser.Block block : line.blocks()) {
+            int thisBlock = blockNo++;
+            if (!recordThinking && block.kind().equals(TranscriptParser.THINKING)) {
+              continue;
+            }
+            String text = redactor.redact(block.text());
+            String hash = ContentCodec.hash(text);
+            if (contents.putIfAbsent(hash, text) == null) {
+              batchChars += text.length();
+            }
+            TranscriptParser.Usage recorded = usage;
+            if (recorded != null) {
+              usage = null;
+              usageMessageId = line.messageId();
+            }
+            batch.add(
+                new MessageRecord(
+                    sessionId,
+                    agentId,
+                    lineNo,
+                    thisBlock,
+                    account.accountId(),
+                    block.kind(),
+                    block.subtype(),
+                    line.ts(),
+                    line.uuid(),
+                    line.parentUuid(),
+                    line.messageId(),
+                    line.model(),
+                    block.toolName(),
+                    block.toolUseId(),
+                    hash,
+                    text.getBytes(StandardCharsets.UTF_8).length,
+                    preview(text),
+                    recorded == null ? null : recorded.input(),
+                    recorded == null ? null : recorded.output(),
+                    recorded == null ? null : recorded.cacheRead(),
+                    recorded == null ? null : recorded.cacheCreation()));
           }
-          TranscriptParser.Usage recorded = usage;
-          if (recorded != null) {
-            usage = null;
-            usageMessageId = line.messageId();
-          }
-          batch.add(
-              new MessageRecord(
-                  sessionId,
-                  agentId,
-                  lineNo,
-                  thisBlock,
-                  account.accountId(),
-                  block.kind(),
-                  block.subtype(),
-                  line.ts(),
-                  line.uuid(),
-                  line.parentUuid(),
-                  line.messageId(),
-                  line.model(),
-                  block.toolName(),
-                  block.toolUseId(),
-                  hash,
-                  text.getBytes(StandardCharsets.UTF_8).length,
-                  preview(text),
-                  recorded == null ? null : recorded.input(),
-                  recorded == null ? null : recorded.output(),
-                  recorded == null ? null : recorded.cacheRead(),
-                  recorded == null ? null : recorded.cacheCreation()));
+        }
+        if (batchLines >= BATCH_LINES || batchChars >= BATCH_CHARS) {
+          store.writeBatch(
+              batch,
+              contents,
+              new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId),
+              meta == null ? null : meta.record(sessionId, account));
+          totalMessages += batch.size();
+          batch = new ArrayList<>();
+          contents = new LinkedHashMap<>();
+          batchLines = 0;
+          batchChars = 0;
         }
       }
-      if (batchLines >= BATCH_LINES || batchChars >= BATCH_CHARS) {
-        store.writeBatch(
-            batch,
-            contents,
-            new IngestState(hostId, pathHash, absolute, offset + lineStart, lineNo, usageMessageId),
-            meta == null ? null : meta.record(sessionId, account));
-        totalMessages += batch.size();
-        batch = new ArrayList<>();
-        contents = new LinkedHashMap<>();
-        batchLines = 0;
-        batchChars = 0;
-      }
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
     }
     if (batchLines > 0) {
       store.writeBatch(
           batch,
           contents,
-          new IngestState(hostId, pathHash, absolute, offset + lineStart, lineNo, usageMessageId),
+          new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId),
           meta == null ? null : meta.record(sessionId, account));
       totalMessages += batch.size();
     }
