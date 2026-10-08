@@ -112,6 +112,15 @@ class UiServerTest {
       assertEquals("nosniff", page.headers().firstValue("X-Content-Type-Options").orElseThrow());
       assertEquals(200, get(server, "/app.css", true).statusCode());
       assertEquals(200, get(server, "/render.js", true).statusCode());
+      HttpResponse<String> icon = get(server, "/icon.svg", true);
+      assertEquals(200, icon.statusCode());
+      assertEquals("image/svg+xml", icon.headers().firstValue("Content-Type").orElseThrow());
+      assertTrue(icon.body().startsWith("<svg"));
+      for (String image : List.of("/icon-32.png", "/icon-180.png", "/favicon.ico")) {
+        assertEquals(200, get(server, image, true).statusCode(), image);
+        assertEquals(401, get(server, image, false).statusCode(), image + " is behind the token like everything else");
+      }
+      assertEquals("image/png", get(server, "/icon-32.png", true).headers().firstValue("Content-Type").orElseThrow());
       assertEquals(404, get(server, "/app.js.map", true).statusCode());
       assertEquals(404, get(server, "/api/nothing", true).statusCode());
 
