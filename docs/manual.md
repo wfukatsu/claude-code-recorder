@@ -1,37 +1,39 @@
-# 操作マニュアル
+# Manual
 
-`ccrec` のインストールから、日々の使い方、ブラウザでの閲覧、記録の削除、困ったときの対処までを説明します。何がどう記録されるかの詳細は [リファレンス](reference.md) にあります。
+English | [日本語](manual.ja.md)
 
-画面とコマンドの例は、説明用に作ったデータのものです。
+How to install `ccrec`, use it day to day, look at the recordings in a browser, delete them, and what to do when something goes wrong. What exactly is recorded, and how, is in the [reference](reference.md).
 
-## 目次
+The screens and the command output shown here are from data made up for the purpose.
 
-1. [準備する](#1-準備する)
-2. [記録する](#2-記録する)
-3. [ブラウザで見る](#3-ブラウザで見る)
-4. [コマンドで見る](#4-コマンドで見る)
-5. [記録を消す](#5-記録を消す)
-6. [記録しない範囲を決める](#6-記録しない範囲を決める)
-7. [保存先を変える](#7-保存先を変える)
-8. [更新する、やめる](#8-更新するやめる)
-9. [困ったとき](#9-困ったとき)
-10. [コマンドとファイルの一覧](#10-コマンドとファイルの一覧)
+## Contents
 
-## 1. 準備する
+1. [Getting ready](#1-getting-ready)
+2. [Recording](#2-recording)
+3. [Looking in a browser](#3-looking-in-a-browser)
+4. [Looking from the command line](#4-looking-from-the-command-line)
+5. [Deleting recordings](#5-deleting-recordings)
+6. [Choosing what is not recorded](#6-choosing-what-is-not-recorded)
+7. [Changing where it records](#7-changing-where-it-records)
+8. [Updating and removing](#8-updating-and-removing)
+9. [When something goes wrong](#9-when-something-goes-wrong)
+10. [Commands and files](#10-commands-and-files)
 
-### 必要なもの
+## 1. Getting ready
 
-| 必要なもの | バージョン | 確認のしかた |
+### What you need
+
+| What | Version | How to check |
 |---|---|---|
-| Node.js | 18 以降 | `node --version` |
-| Java（実行環境） | 17 以降 | `java -version` |
-| Claude Code | フックが使える版 | `claude --version` |
+| Node.js | 18 or later | `node --version` |
+| Java (a runtime) | 17 or later | `java -version` |
+| Claude Code | a version with hooks | `claude --version` |
 
-Java は実行できれば足ります。配布パッケージにはビルド済みのエンジンが入っているので、JDK やビルドツールは要りません。
+Java only has to run. The package carries the built engine, so neither a JDK nor a build tool is needed.
 
-### インストールする
+### Installing
 
-配布パッケージ（`.tgz`）を GitHub のリリースから取得して、`npm install` で入れます。
+Get the package (`.tgz`) from the GitHub release and install it with `npm install`.
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
@@ -39,29 +41,29 @@ npm install -g ./claude-code-recorder-1.0.0.tgz
 ccrec version
 ```
 
-`ccrec version` がバージョンを表示すれば、インストールできています。
+When `ccrec version` prints a version, it is installed.
 
-リポジトリから直接入れることもできます。この場合はインストール時にエンジンをビルドするので、JDK 17 以降と、依存ライブラリを取得するためのネットワーク接続が必要です。
+It can also be installed straight from the repository. The engine is then built during the install, which needs JDK 17 or later and a network connection to fetch its dependencies.
 
 ```bash
 npm install -g github:wfukatsu/claude-code-recorder
 ```
 
-### 初期設定をする
+### First setup
 
 ```bash
-ccrec init            # ~/.ccrec を作る（SQLite に記録する設定つき）
-ccrec install-hooks   # Claude Code に記録用のフックを追加する
-ccrec doctor          # 動く状態かを確かめる
+ccrec init            # create ~/.ccrec, set up to record into SQLite
+ccrec install-hooks   # add the recording hooks to Claude Code
+ccrec doctor          # check that everything is in place
 ```
 
-`ccrec install-hooks` は `~/.claude/settings.json` に 4 つのフックを足します。ほかの設定には触れません。変更前のファイルは、最初の 1 回だけ `~/.claude/settings.json.ccrec-bak` に残します。
+`ccrec install-hooks` adds four hooks to `~/.claude/settings.json` and touches nothing else in it. The file as it was is kept, the first time only, as `~/.claude/settings.json.ccrec-bak`.
 
-特定のプロジェクトだけで記録したい場合は、そのプロジェクトのディレクトリで `ccrec install-hooks --project` を実行します。`./.claude/settings.json` にフックが入ります。
+To record in one project only, run `ccrec install-hooks --project` in that project's directory. The hooks then go into `./.claude/settings.json`.
 
-### 動く状態かを確かめる
+### Checking that it works
 
-`ccrec doctor` の全部の行が `ok` なら準備完了です。
+When every line of `ccrec doctor` says `ok`, you are ready.
 
 ```
 ok    Java 17 or later  (found 17)
@@ -73,255 +75,255 @@ ok    queue entries readable  (0 unreadable in /Users/alice/.ccrec/spool)
 account  emp-alice  via env
 ```
 
-最後の行は、記録がどのアカウントに付くかを示します。`FAIL` が出た場合は [困ったとき](#9-困ったとき) を見てください。
+The last line says which account recordings are filed under. For a line that says `FAIL`, see [When something goes wrong](#9-when-something-goes-wrong).
 
-## 2. 記録する
+## 2. Recording
 
-### 自動で記録する
+### Recording as you go
 
-フックを入れた後は、何もしなくても記録されます。Claude Code が応答を終えるたびに、前回からの差分だけがデータベースに入ります。
+Once the hooks are installed, recording needs nothing from you. Each time Claude Code finishes a response, what is new since the last time goes into the database.
 
-- フックがすることは、記録の依頼をキューに置くことだけです。データベースへの書き込みは別のプロセスが行うので、Claude Code は待たされません。
-- 記録が走らなかった場合（パソコンを閉じた、Java が見つからなかったなど）は、次に Claude Code が応答したときにまとめて記録されます。
-- すでに動いている Claude Code のセッションにも、フックを入れた直後の応答から効きます。
+- All a hook does is leave a request in a queue. Another process writes to the database, so Claude Code is not kept waiting.
+- When a recording did not happen — the laptop was closed, Java could not be found — it is made up for the next time Claude Code responds.
+- A Claude Code session already running picks the hooks up from its next response.
 
-### 過去のやりとりを取り込む
+### Bringing in what happened before
 
-フックを入れる前のやりとりは、Claude Code が残しているトランスクリプトから取り込めます。
+What happened before the hooks were installed can be recorded from the transcripts Claude Code keeps.
 
 ```bash
-ccrec import ~/.claude/projects/<プロジェクトのディレクトリ>/
-ccrec import ~/.claude/projects/<プロジェクトのディレクトリ>/<セッション ID>.jsonl
+ccrec import ~/.claude/projects/<project directory>/
+ccrec import ~/.claude/projects/<project directory>/<session id>.jsonl
 ```
 
-- ディレクトリを指定すると、その中の `*.jsonl` をすべて取り込みます。
-- 何度実行しても重複しません。取り込み済みの行は読み飛ばします。
-- 取り込んだ記録は、実行した人のアカウントに付きます。すでに記録のあるセッションは、最初に記録したアカウントのままです。
+- Given a directory, it records every `*.jsonl` in it.
+- Running it again records nothing twice: lines already recorded are skipped.
+- What it records is filed under the account of whoever runs it. A session that already has records stays with the account that first recorded it.
 
-### どのアカウントに記録されるか
+### Which account it is filed under
 
 ```bash
 ccrec whoami
 ```
 
-アカウントは次の順で決まります。
+The account is decided in this order:
 
-1. 環境変数 `CCREC_ACCOUNT_ID`（管理者が配る社員 ID など）
-2. Claude Code にログインしているアカウント
-3. OS のユーザー名（`local-<ユーザー名>`）
+1. the environment variable `CCREC_ACCOUNT_ID` (an employee id handed out by an administrator, say)
+2. the account Claude Code is logged in with
+3. the operating system's user name (`local-<user>`)
 
-## 3. ブラウザで見る
+## 3. Looking in a browser
 
-### 起動する、止める
+### Starting and stopping
 
 ```bash
 ccrec ui
 ```
 
-サーバーが起動し、ブラウザが開きます。開かない場合は、ターミナルに表示されるアドレスを開いてください。
+A server starts and a browser opens. If none opens, open the address printed on the terminal.
 
 ```
 ccrec ui: http://127.0.0.1:4127/?token=…
 Ctrl-C stops it.
 ```
 
-- 止めるには、起動したターミナルで Ctrl-C を押します。
-- アドレスの `token=…` は、起動のたびに変わる合言葉です。このアドレスを人に渡さないでください。
-- 待ち受けるのはこの端末（`127.0.0.1`）だけです。ほかの端末からは見られません。
-- ポートを変えるには `ccrec ui --port 4200` のようにします。ブラウザを開かずアドレスだけを表示するには `--no-open` を付けます。
+- To stop it, press Ctrl-C in the terminal it was started from.
+- The `token=…` in the address is a password that changes at every start. Do not hand the address to anyone.
+- It listens on this machine (`127.0.0.1`) only. Nothing else on the network can see it.
+- `ccrec ui --port 4200` uses another port. `--no-open` prints the address without opening a browser.
 
-### 画面に共通の操作
+### What every screen has
 
-画面の上部に、次のものが並びます。
+Across the top:
 
-- **セッション / 使用量 / 状態**: 画面を切り替えます。
-- **アカウント**: データベースに記録のあるアカウントを切り替えます。最初は、起動した人のアカウントが選ばれています。
-- **English / 日本語**: 表示の言語を切り替えます。
+- **Sessions / Usage / Status** switch between the screens.
+- **Account** switches between the accounts that have recordings in the database. It starts on the account of whoever started it.
+- **日本語 / English** switches the language.
 
-選んだ言語、アカウント、期間、並び順は、ブラウザが覚えています。
+The browser remembers the language, the account, the period and the order you chose.
 
-### セッション一覧
+### Sessions
 
-![セッション一覧](images/ui-sessions.jpg)
+![Sessions](images/en/ui-sessions.jpg)
 
-最初に開く画面です。最後に動きのあったセッションが上に来ます。
+The screen it opens on. The session that was active most recently is at the top.
 
-- **絞り込み**: 期間（直近 7 / 30 / 90 日、すべて）、プロジェクト、タイトルの一部で絞り込めます。
-- **合計**: 表示しているセッションの件数、API 応答数、出力と入力のトークン数、金額が上に出ます。
-- **列**: 最終更新、タイトルとプロジェクト（ブランチ）、使ったモデル、API 応答数、出力トークン数、金額です。
-- **開く**: タイトルを押すと、そのセッションの詳細に移ります。
+- **Filters**: the period (the last 7, 30 or 90 days, or all time), the project, and part of the title.
+- **Totals**: the number of sessions shown, their API messages, output and input tokens, and cost.
+- **Columns**: when it was last active, its title and project (and branch), the models it used, API messages, output tokens, cost.
+- **Opening one**: click a title to go to that session.
 
-金額は、Claude Code 自身がそのセッションについて書き残した値です。書き残されていないセッションは「–」になります。
+The cost is what Claude Code itself wrote down for the session. A session it wrote none for shows "–".
 
-### セッション詳細
+### A session
 
-![セッション詳細](images/ui-session.jpg)
+![A session](images/en/ui-session.jpg)
 
-上から、タイトル、プロジェクトと時刻、主な数字（プロンプト数、ターン数と時間、出力トークン数、ツール呼び出しとエラー、PR、金額）、5 つのタブが並びます。
+From the top: the title, the project and the times, the main figures (prompts, turns and their duration, output tokens, tool calls and errors, pull requests, cost), and five tabs.
 
-#### 「やりとり」タブ
+#### The Conversation tab
 
-やりとりを 1 件 1 行で表示します。
+One row per record.
 
-- **並び順**: 最初は新しい順です。長いセッションでも、最新のやりとりがすぐ見られます。会話として上から読みたいときは、「並び順」を「古い順」にします。
-- **表示する種類**: チェックボックスで、プロンプト、応答、ツール、thinking、コンテキスト、system などを出し入れします。かっこ内は件数です。最初はプロンプト、応答、ツールだけを表示します。
-- **エージェント**: サブエージェントを使ったセッションでは、エージェントごとに絞り込めます。
-- **続きを読み込む**: 一度に 500 件まで表示します。それより多い場合は、下のボタンで続きを読み込みます。
+- **Order**: newest first to begin with, so that the latest of a long session is right there. To read it as a conversation from the top, set "Order" to "Oldest first".
+- **What is shown**: checkboxes bring prompts, responses, tools, thinking, context and system records in and out. The numbers in parentheses are counts. Prompts, responses and tools are shown to begin with.
+- **Agent**: in a session that used sub-agents, narrow it to one of them.
+- **Load more**: up to 500 records are shown at a time; the button at the bottom loads the next ones.
 
-プロンプトと応答は、最初から開いた状態で表示します。
+Prompts and responses are open from the start.
 
-- Markdown（見出し、箇条書き、表、コード）を整形します。
-- 長い本文は 1 画面ぶんで折りたたみます。「すべて表示」で開きます。
-- 「原文」を押すと、記録されたままの文字に切り替わります。
+- Markdown — headings, lists, tables, code — is laid out.
+- A long text is held to about a screenful. "Show all" opens it.
+- "As recorded" switches to the characters as they were stored.
 
-行の左の色とラベルで、種類を見分けられます。
+The colour at the left of a row and its label say what it is.
 
-| ラベル | 意味 | 見た目 |
+| Label | What it is | How it looks |
 |---|---|---|
-| プロンプト | 人が打ったプロンプト | 左に橙の線 |
-| 応答 | Claude の応答 | 左に緑の線 |
-| コマンド | スラッシュコマンドの実行 | 左に青の線 |
-| 通知 | バックグラウンドタスクなどの通知 | 灰色の地 |
-| コマンド出力 | コマンドの出力 | 灰色の地 |
-| 圧縮後の要約 | 会話を圧縮したときに Claude Code が書いた要約 | 灰色の地、最初は閉じている |
+| Prompt | A prompt somebody typed | An orange line at the left |
+| Response | Claude's response | A green line at the left |
+| Command | A slash command being run | A blue line at the left |
+| Notice | A notification, of a background task for instance | A grey background |
+| Command output | What a command printed | A grey background |
+| Summary after compaction | The summary Claude Code writes when it compacts a conversation | A grey background; closed to begin with |
 
-ツールの行は、押すと開きます。
+A tool's row opens when clicked.
 
-![ツールの表示](images/ui-tools.jpg)
+![Tools](images/en/ui-tools.jpg)
 
-- 閉じた状態では、ツール名と要点（`Bash` は説明、ファイル操作はファイルのパス）、結果の大きさが出ます。
-- `Bash` は、説明とコマンド、その下に結果を表示します。
-- `Edit` と `Write` は、ファイルのパス、変更前（赤）、変更後（緑）を表示します。
-- 失敗した呼び出しは、左に赤い線が付き、結果に「失敗」と出ます。
+- Closed, it shows the tool, the gist of the call (Bash's description, a file tool's path) and the size of what came back.
+- `Bash` shows its description and command, and the result below.
+- `Edit` and `Write` show the file's path, what was removed (red) and what was added (green).
+- A call that failed has a red line at the left, and its result says "failed".
 
-やりとりの中で、この端末と Claude 以外に届いたツール呼び出しには、行の右に「↗ 送信先」の印が付きます。
+In the conversation, a tool call that reached beyond this machine and Claude carries a tag at the right of its row: "↗" and where it went.
 
-#### 「外部通信」タブ
+#### The Network tab
 
-![外部通信](images/ui-network.jpg)
+![Network](images/en/ui-network.jpg)
 
-この端末と Claude 以外に届いたツール呼び出しを、1 か所にまとめたタブです。何をどこに送り、何が返ってきたかを確かめられます。
+The tool calls that reached beyond this machine and Claude, gathered in one place: what was sent where, and what came back.
 
-- **送信先の表**: 送信先ごとに、経路、呼び出し回数、送信と受信の大きさ、エラーの数、最後に呼び出した時刻が出ます。
-- **経路で絞り込む**: 上のチェックボックスで、Web、シェル、MCP を出し入れします。
-- **送信先で絞り込む**: 表の送信先を押すと、その送信先への呼び出しだけになります。もう一度押すと戻ります。
-- **呼び出しの一覧**: 下に、該当する呼び出しが並びます。行を開くと、送信した内容（入力）と返ってきた内容（結果）が出ます。
+- **The table of destinations**: for each, the way out, the number of calls, how much was sent and received, how many failed, and when it was last called.
+- **Filtering by way out**: the checkboxes at the top bring Web, Shell and MCP in and out.
+- **Filtering by destination**: click a destination in the table to keep only the calls to it. Click it again to go back.
+- **The calls**: listed below. Open a row to see what was sent (the input) and what came back (the result).
 
-経路は 3 種類です。
+There are three ways out.
 
-| 経路 | 対象 | 送信先の出かた |
+| Way out | What it covers | How the destination is shown |
 |---|---|---|
-| Web | `WebFetch`、`WebSearch` など、アドレスを指定するツール | アドレスのホスト名。検索は `(web search)` |
-| シェル | `Bash` で動かした、通信するプログラム（`curl`、`wget`、`git push`、`gh`、`npm install`、`ssh` など） | コマンドに書かれたホスト名。書かれていなければ `(git remote)`、`(npm registry)` などの種類 |
-| MCP | MCP サーバーのツール | 入力にアドレスがあればそのホスト名。なければ `(MCP: サーバー名)` |
+| Web | `WebFetch`, `WebSearch` and other tools that take an address | The address's host name; a search is `(web search)` |
+| Shell | Programs run from `Bash` that talk to the network (`curl`, `wget`, `git push`, `gh`, `npm install`, `ssh` and so on) | The host name in the command; without one, the kind of place, such as `(git remote)` or `(npm registry)` |
+| MCP | An MCP server's tools | The host name of an address in the input; without one, `(MCP: server name)` |
 
-次のものは外部通信に数えません。
+These are not counted:
 
-- `localhost`、`127.0.0.1`、社内の IP アドレス（`10.x`、`192.168.x` など）、ドットの無いホスト名
-- Claude 自身（`anthropic.com`、`claude.ai`、`claude.com`）
-- この端末の中で動く MCP サーバー（ブラウザの操作など）。ただし、入力に外部のアドレスがあれば数えます
+- `localhost`, `127.0.0.1`, private addresses (`10.x`, `192.168.x` and the like), host names without a dot
+- Claude itself (`anthropic.com`, `claude.ai`, `claude.com`)
+- MCP servers that run on this machine (browser automation, for instance) — unless the input has an outside address
 
-**これは通信そのものを記録したものではありません。** ツール名、アドレス、コマンドの中身から判定しています。そのため、次の点に注意してください。
+**This is not a capture of the traffic.** It is worked out from the tool's name, the addresses and the contents of the command. So:
 
-- スクリプトの中から直接通信した場合（`python3 script.py` や `node app.js` が中で通信する場合）は、見つけられません。
-- 通信するプログラムを動かしていれば、実際には通信しなかった場合も数えます。
-- ヒアドキュメントで書き込んだファイルや、コミットメッセージに含まれるアドレスは数えません。
-- MCP サーバーがこの端末の中だけで動くかどうかは、名前からは分かりません。よく使われるものは最初から端末内として扱います。それ以外で端末内のものは、`~/.ccrec/config.json` の `localMcpServers` にサーバー名を書くと、外部通信から外せます。
+- What a script does on its own (`python3 script.py` or `node app.js` opening a connection inside) is not seen.
+- A program that talks to the network is counted even when, that time, it did not.
+- An address in a file written by a here-document, or in a commit message, is not counted.
+- Whether an MCP server stays on this machine cannot be told from its name. The common ones are treated as local from the start. For any other that is local, write its name under `localMcpServers` in `~/.ccrec/config.json` to leave it out.
 
 ```json
 { "recordThinking": true, "redact": true, "localMcpServers": ["my-local-server"] }
 ```
 
-#### 「使用量」タブ
+#### The Usage tab
 
-モデルごとの API 応答数とトークン数です。入力、出力、thinking、キャッシュの読み出しと書き込み、Web の検索・取得回数が並びます。thinking は出力の内数です。
+API messages and tokens per model: input, output, thinking, cache read and cache write, and web searches and fetches. Thinking is part of output.
 
-#### 「ツール」タブ
+#### The Tools tab
 
-ツールごとの呼び出し回数とエラー回数です。MCP のツールは `mcp__<サーバー>__<ツール>` の名前で出ます。
+Calls and errors per tool. MCP tools appear as `mcp__<server>__<tool>`.
 
-#### 「付帯情報」タブ
+#### The Details tab
 
-セッションについて分かっていることの一覧です。起動元、Claude Code のバージョン、API とツールの所要時間、変更行数、プロンプトの出どころ、終了理由、権限モード、使ったスキルや MCP サーバー、作成した PR などです。
+What is known about the session: the entrypoint, Claude Code's version, time spent in the API and in tools, lines changed, where the prompts came from, stop reasons, permission modes, the skills and MCP servers used, pull requests opened, and so on.
 
-### 使用量
+### Usage
 
-![使用量](images/ui-usage.jpg)
+![Usage](images/en/ui-usage.jpg)
 
-アカウントの使用量を期間で見る画面です。
+An account's usage over a period.
 
-- **期間と指標**: 上のセレクターで、期間（直近 7 / 30 / 90 日）と指標（出力トークン、入力トークン、API 応答数）を選びます。
-- **グラフ**: 1 日 1 本の棒で、モデルごとに色を分けて積み上げます。棒にカーソルを合わせると、日付、モデル、値が出ます。
-- **モデル別、プロジェクト別**: 同じ期間の合計を表で示します。プロジェクト別には金額も出ます。
+- **Period and metric**: the selectors at the top choose the period (the last 7, 30 or 90 days) and what is measured (output tokens, input tokens, API messages).
+- **The chart**: one bar a day, stacked by model in different colours. Hover over a segment for its day, model and value.
+- **By model, by project**: totals over the same period, as tables. The projects also show cost.
 
-セッションの使用量は、そのセッションを開始した日にまとめて計上します。日をまたいで続いたセッションは、開始日に全部が載ります。
+A session's usage is counted on the day the session started. A session that ran past midnight is counted whole on its first day.
 
-### 状態
+### Status
 
-記録が正しく動いているかを確かめる画面です。`ccrec doctor` と同じ確認を、ブラウザで見られます。
+Whether recording is working. It is `ccrec doctor` in a browser.
 
-- **確認**: フックが入っているか、未記録のセッションが無いか、読めないキューが無いかを `ok` / `FAIL` で示します。
-- **環境**: バージョン、データの場所、保存先、設定の内容です。データベースのパスワードは表示しません。
-- **フックが保持しているセッション**: 開いているセッションごとに、最後のイベント、取り込みを求めた時刻、最後に取り込んだ時刻、状態を示します。
-- **取り込みログ**: 取り込みを起動した時刻と結果の、最新の 60 行です。
+- **Checks**: whether the hooks are installed, whether any session is waiting to be recorded, whether any queue entry is unreadable — each `ok` or `FAIL`.
+- **Environment**: the version, where the data is, where it records, the settings. The database password is not shown.
+- **Sessions the hooks hold**: for each open session, the last event, when an ingest was asked for, when it was last ingested, and its state.
+- **Ingest log**: the last 60 lines of when ingests were started and what they did.
 
-「更新」を押すと読み直します。
+"Refresh" reads it again.
 
-### 画面から削除する
+### Deleting from the browser
 
-![削除の確認](images/ui-delete.jpg)
+![Confirming a deletion](images/en/ui-delete.jpg)
 
-- **1 件を消す**: セッション詳細の右上にある「セッションを削除」を押します。
-- **まとめて消す**: 一覧で行の左のチェックボックスを付け、上に出る「選択した n 件を削除」を押します。一度に 50 件までです。
+- **One session**: "Delete session" at the top right of the session's page.
+- **Several**: tick the checkboxes at the left of the rows in the list, then "Delete the n selected" in the bar that appears. Up to 50 at a time.
 
-どちらも確認の画面が出ます。「削除する」を押すと消えます。**元に戻せません。** 消えるものは [記録を消す](#5-記録を消す) と同じです。
+Either way a confirmation appears. "Delete" deletes. **It cannot be undone.** What goes is the same as in [Deleting recordings](#5-deleting-recordings).
 
-絞り込みを変えて見えなくなった行の選択は、自動で外れます。見えていないセッションが消えることはありません。
+When a filter hides a row, its tick is dropped. A session you cannot see is never deleted.
 
-## 4. コマンドで見る
+## 4. Looking from the command line
 
-### セッションの一覧
+### Sessions
 
 ```bash
-ccrec sessions                  # 自分のセッション（新しい順、30 件）
+ccrec sessions                  # your sessions, newest first, 30 of them
 ccrec sessions --limit 100
 ccrec sessions --account emp-bob
-ccrec sessions --day 20261007   # 組織の、その日に始まったセッション
+ccrec sessions --day 20261007   # the organization's sessions that started that day
 ```
 
 ```
-2026-10-08 14:43  a1a1a1a1-0000-4000-8000-999999999999  emp-alice  claude-opus-5-5  注文一覧のページングを直す
-2026-10-07 08:35  a1a1a1a1-0000-4000-8000-000000000002  emp-alice  claude-haiku-4-5  Webhook の再送処理を実装
+2026-10-08 16:13  a1a1a1a1-0000-4000-8000-999999999999  emp-alice  claude-opus-5-5  Fix paging in the order list
+2026-10-08 15:03  a1a1a1a1-0000-4000-8000-999999999998  emp-alice  claude-opus-5-5  Fix the payment API timeout
 ```
 
-左から、開始時刻、セッション ID、アカウント、最後に使ったモデル、タイトルです。ほかのコマンドには、このセッション ID を渡します。`--day` の日付は UTC です。
+From the left: when it started, the session id, the account, the model it last used, the title. The other commands take this session id. The day given to `--day` is in UTC.
 
-### やりとりの中身
+### What was said and done
 
 ```bash
-ccrec show <セッション ID>                          # 各レコードの先頭を表示
-ccrec show <セッション ID> --kind user_prompt,assistant_text
-ccrec show <セッション ID> --full                   # 本文を全部表示
-ccrec show <セッション ID> --json
+ccrec show <session-id>                          # the beginning of each record
+ccrec show <session-id> --kind user_prompt,assistant_text
+ccrec show <session-id> --full                   # all of each text
+ccrec show <session-id> --json
 ```
 
 ```
---- [main] user_prompt  line 2.0  2026-10-08 14:44  258 bytes
-注文一覧のページングで、2 ページ目以降が同じ内容になる不具合を直してください。
---- [main] tool_use Read  line 3.0  2026-10-08 14:44  61 bytes  claude-opus-5-5  in=24 out=180 cache read=48000 write=1500
+--- [main] user_prompt  line 2.0  2026-10-08 16:13  218 bytes
+Paging in the order list is broken: every page after the first shows the same orders. Please fix it.
+--- [main] tool_use Read  line 3.0  2026-10-08 16:13  61 bytes  claude-opus-5-5  in=24 out=160 cache read=48000 write=1500
 ```
 
-`--kind` に指定できる種類は、`user_prompt`、`assistant_text`、`thinking`、`tool_use`、`tool_result`、`system_prompt`、`tool_definitions`、`context`、`system`、`cost`、`pr_link`、`mcp_meta` などです。
+The kinds `--kind` takes include `user_prompt`, `assistant_text`, `thinking`, `tool_use`, `tool_result`, `system_prompt`, `tool_definitions`, `context`, `system`, `cost`, `pr_link` and `mcp_meta`.
 
-### セッションの要約
+### A session, summed up
 
 ```bash
-ccrec summary <セッション ID>
-ccrec summary <セッション ID> --json
+ccrec summary <session-id>
+ccrec summary <session-id> --json
 ```
 
 ```
-title                 注文一覧のページングを直す
+title                 Fix paging in the order list
 cost usd              $2.84 (as Claude Code last wrote it down)
 api duration          3m06s
 lines added           38
@@ -337,92 +339,92 @@ Edit       1       0
 Read       1       0
 ```
 
-（一部の行を省いています。）この下に、モデル別の使用量の表が続きます。
+(Some lines are left out here.) A table of usage per model follows.
 
-### 使用量
+### Usage
 
 ```bash
-ccrec usage                     # 自分の直近 30 セッションの合計
-ccrec usage <セッション ID>...   # そのセッションの分
-ccrec usage --day 20261007      # 組織の、その日のセッションの分
+ccrec usage                     # the total of your 30 latest sessions
+ccrec usage <session-id>...     # those sessions
+ccrec usage --day 20261007      # the organization's sessions of that day
 ccrec usage --json
 ```
 
 ```
 account    model              messages        input       output     thinking     cache read    cache write    web
-emp-alice  claude-haiku-4-5         20          600        9,284            0        324,940         18,568      0
-emp-alice  claude-opus-5-5          27          768       78,166          840      3,005,310        163,032      0
-emp-alice  claude-sonnet-5-5         5          150       15,000            0        525,000         30,000      0
-total      5 sessions               52        1,518      102,450          840      3,855,250        211,600      0
+emp-alice  claude-haiku-4-5         14          420        6,834            0        239,190         13,668      0
+emp-alice  claude-opus-5-5          33          876       54,967        2,280      2,705,645        130,994      0
+emp-alice  claude-sonnet-5-5         4          120       12,000            0        420,000         24,000      0
+total      5 sessions               51        1,416       73,801        2,280      3,364,835        168,662      0
 ```
 
-`messages` は API 応答の数、`web` は Web の検索と取得の回数の合計です。
+`messages` is the number of API messages; `web` is web searches and fetches together.
 
-## 5. 記録を消す
+## 5. Deleting recordings
 
-### セッションを指定して消す
+### Deleting sessions by id
 
 ```bash
-ccrec delete <セッション ID>...
+ccrec delete <session-id>...
 ```
 
-### 古いものをまとめて消す
+### Deleting old ones together
 
 ```bash
-ccrec delete --older-than 90d --dry-run   # 対象を表示するだけ。何も消さない
-ccrec delete --older-than 90d             # 90 日以上動きのないセッションを消す
-ccrec delete --before 2026-07-01          # その日の 0 時より前に動きが止まったものを消す
+ccrec delete --older-than 90d --dry-run   # only lists them; deletes nothing
+ccrec delete --older-than 90d             # sessions with no activity for 90 days or more
+ccrec delete --before 2026-07-01          # sessions whose activity stopped before that day began
 ```
 
 ```
-2026-09-09 14:45  a1a1a1a1-0000-4000-8000-000000000046  依存ライブラリを更新してテストを直す
-2026-09-09 08:40  a1a1a1a1-0000-4000-8000-000000000047  ログイン画面の入力チェックを追加
-10 sessions of emp-alice last active before 2026-09-13 15:33; nothing deleted
+2026-09-09 16:14  a1a1a1a1-0000-4000-8000-000000000046  Rework the order of search results
+2026-09-09 10:09  a1a1a1a1-0000-4000-8000-000000000047  Fix garbled text in the CSV export
+10 sessions of emp-alice last active before 2026-09-13 17:02; nothing deleted
 ```
 
-先に `--dry-run` で対象を確かめてから、外して実行することを勧めます。対象は自分のアカウントの分です。`--account <ID>` で変えられます。
+Look at what `--dry-run` lists first, then run it without. It covers your own account; `--account <id>` changes that.
 
-### 消えるもの、残るもの
+### What goes and what stays
 
 | | |
 |---|---|
-| 消える | セッションの行、やりとりの記録、使用量、取り込み位置、ほかのセッションが使っていない本文 |
-| 残る | ほかのセッションも使っている本文（共通のシステムプロンプトなど） |
-| 残る | Claude Code のトランスクリプト（`~/.claude/projects` 配下） |
+| Goes | The session's row, its records, its usage, how far its files were read, and every content no other session uses |
+| Stays | Content other sessions also use (a system prompt they share, for instance) |
+| Stays | Claude Code's own transcripts (under `~/.claude/projects`) |
 
-- **元に戻せません。** 確認は求められないので、セッション ID と日付をよく確かめてください。
-- セッション ID を指定して消したセッションは、フックからは以後記録されません。`ccrec import` で明示的に取り込めば、最初から記録し直せます。
-- SQLite のファイルは小さくなりません。空いた領域は、以後の記録に再利用されます。ファイルからも痕跡を消すには、`sqlite3 ~/.ccrec/ccrec.sqlite3 VACUUM` を実行します。
-- 定期的に消す機能はありません。必要なら、`ccrec delete --older-than 90d` を cron などから実行してください。
+- **It cannot be undone.** No confirmation is asked on the command line, so check the session ids and the date.
+- A session deleted by its id is not recorded by the hooks again. Importing it explicitly with `ccrec import` records it afresh from the start.
+- The SQLite file does not shrink. The space freed is used again by later recordings. To remove the traces from the file as well, run `sqlite3 ~/.ccrec/ccrec.sqlite3 VACUUM`.
+- Nothing deletes on a schedule. If you want that, run `ccrec delete --older-than 90d` from cron or the like.
 
-## 6. 記録しない範囲を決める
+## 6. Choosing what is not recorded
 
-| やりたいこと | 方法 |
+| To | Do this |
 |---|---|
-| 一時的に何も記録しない | 環境変数 `CCREC_DISABLE=1` を設定して Claude Code を起動する |
-| あるプロジェクトを記録しない | プロジェクトの直下に空のファイル `.ccrec-ignore` を置く |
-| thinking を記録しない | `~/.ccrec/config.json` で `"recordThinking": false` にする |
-| 特定の種類を記録しない | `~/.ccrec/config.json` の `"exclude"` に種類を書く |
+| Record nothing for a while | Start Claude Code with the environment variable `CCREC_DISABLE=1` |
+| Leave a project out | Put an empty file named `.ccrec-ignore` at the top of the project |
+| Leave thinking out | Set `"recordThinking": false` in `~/.ccrec/config.json` |
+| Leave some kinds of record out | List them under `"exclude"` in `~/.ccrec/config.json` |
 
-`.ccrec-ignore` は、置いたディレクトリより下のどこで作業していても効きます。一度該当したセッションは、ほかのディレクトリに移っても最後まで記録されません。
+`.ccrec-ignore` applies wherever you work below the directory that holds it. A session it applied to once is not recorded to its end, even after it moves to another directory.
 
-`exclude` の例です。ほかのフックの実行結果を記録から外します。フックを多く入れた環境では、これが記録の半分近くを占めることがあります。
+An example of `exclude`, leaving out what other hooks print. Where many hooks are installed, that can be close to half of all records.
 
 ```json
 { "recordThinking": true, "redact": true, "exclude": ["context/hook_success"] }
 ```
 
-設定は、次に記録するときから効きます。すでに記録した分は消えません。
+Settings take effect from the next recording. What is already recorded is not removed.
 
-### 認証情報の伏せ字
+### Masking credentials
 
-記録する前に、認証情報の形をした文字列を `[REDACTED]` に置き換えます。対象は、主なサービスのトークン、JWT、秘密鍵、URL の中のパスワード、`Authorization` ヘッダーの値、`DB_PASSWORD=…` のような代入です。
+Before anything is stored, strings shaped like credentials are replaced with `[REDACTED]`: the tokens of major services, JWTs, private keys, a password inside a URL, the value of an `Authorization` header, an assignment such as `DB_PASSWORD=…`.
 
-誤って伏せないことを優先しているので、これ以外の形の認証情報は残ります。**記録には、ソースコードや伏せきれなかった認証情報が入りうる**ものとして扱ってください。`~/.ccrec` は、所有者だけが読み書きできる権限で作られます。
+It prefers leaving something in over masking by mistake, so credentials of other shapes remain. **Treat the recordings as something that can contain source code and credentials the masking missed.** `~/.ccrec` is created readable and writable by its owner only.
 
-## 7. 保存先を変える
+## 7. Changing where it records
 
-最初の設定では、`~/.ccrec/ccrec.sqlite3`（SQLite）に記録します。`~/.ccrec/database.properties` を書き換えると、保存先が変わります。
+As first set up, it records into `~/.ccrec/ccrec.sqlite3` (SQLite). Rewriting `~/.ccrec/database.properties` changes that.
 
 ```properties
 scalar.db.storage=jdbc
@@ -432,128 +434,128 @@ scalar.db.password=********
 scalar.db.transaction_manager=consensus-commit
 ```
 
-- 配布パッケージで使えるのは、SQLite、PostgreSQL、MariaDB です。
-- それ以外のデータベースについては、[リファレンス](reference.md#データベースを切り替える) を見てください。
-- 保存先を変えても、変える前の記録は移りません。
+- The package works with SQLite, PostgreSQL and MariaDB.
+- For other databases, see the [reference](reference.md#changing-the-database).
+- Changing where it records does not move what was recorded before.
 
-データの場所そのものを変えるには、環境変数 `CCREC_HOME` を設定します（既定は `~/.ccrec`）。
+To change where the data lives altogether, set the environment variable `CCREC_HOME` (`~/.ccrec` by default).
 
-## 8. 更新する、やめる
+## 8. Updating and removing
 
-### 新しい版に更新する
+### Updating to a new version
 
-新しい配布パッケージを、同じ手順でインストールします。
+Install the new package the same way.
 
 ```bash
-npm install -g ./claude-code-recorder-<新しいバージョン>.tgz
+npm install -g ./claude-code-recorder-<new version>.tgz
 ccrec doctor
 ```
 
-- フックと記録済みのデータは、そのまま使えます。
-- データベースの列やテーブルが増えた場合は、最初の実行時に自動で追加されます。
-- `ccrec ui` を起動したままの場合は、止めて起動し直してください。
-- 新しい版で記録する項目が増えても、すでに記録した分には付きません。付け直すには、そのセッションを消して `ccrec import` で取り込み直します。
+- The hooks and what is recorded carry over as they are.
+- When the database has gained columns or tables, they are added the first time it runs.
+- If `ccrec ui` is running, stop it and start it again.
+- When a new version records more, what was recorded before does not gain it. To get it, delete the session and bring it in again with `ccrec import`.
 
-### 記録をやめる
+### Stopping recording
 
 ```bash
-ccrec uninstall-hooks   # フックを外す。ほかの設定は残る
+ccrec uninstall-hooks   # remove the hooks; other settings stay
 ```
 
-フックを外しても、記録済みのデータは残ります。`ccrec ui` や `ccrec sessions` で引き続き見られます。
+What is recorded stays after the hooks are removed, and `ccrec ui` and `ccrec sessions` still show it.
 
-### 完全に取り除く
+### Removing it completely
 
 ```bash
 ccrec uninstall-hooks
 npm uninstall -g claude-code-recorder
-rm -rf ~/.ccrec          # 記録したデータをすべて消す
+rm -rf ~/.ccrec          # deletes everything that was recorded
 ```
 
-## 9. 困ったとき
+## 9. When something goes wrong
 
-まず `ccrec doctor` を実行してください。`FAIL` の行ごとの対処は次のとおりです。
+Run `ccrec doctor` first. For each line that says `FAIL`:
 
-| `FAIL` の行 | 原因 | 対処 |
+| The line | Why | What to do |
 |---|---|---|
-| `Java 17 or later` | Java が無い、または古い | Java 17 以降を入れる。別の場所の Java を使うなら、環境変数 `CCREC_JAVA` に `java` のパスを設定する |
-| `engine JAR` | エンジンが入っていない | 配布パッケージを入れ直す |
-| `ScalarDB configuration` | 初期設定をしていない | `ccrec init` を実行する |
-| `hooks installed` | フックが入っていない | `ccrec install-hooks` を実行する |
-| `queued sessions recorded` | 10 分以上記録されていないセッションがある | `ccrec ingest` を実行する。直らなければ、表示される `ingest.log` の内容を確かめる |
-| `queue entries readable` | 壊れたキューがある | `~/.ccrec/spool/*.json.bad` を確かめ、不要なら消す |
+| `Java 17 or later` | Java is missing or too old | Install Java 17 or later. To use a Java somewhere else, set the environment variable `CCREC_JAVA` to the path of `java` |
+| `engine JAR` | The engine is not there | Install the package again |
+| `ScalarDB configuration` | The first setup was not done | Run `ccrec init` |
+| `hooks installed` | The hooks are not installed | Run `ccrec install-hooks` |
+| `queued sessions recorded` | A session has gone unrecorded for more than 10 minutes | Run `ccrec ingest`. If that does not help, look at the lines of `ingest.log` it prints |
+| `queue entries readable` | A queue entry is broken | Look at `~/.ccrec/spool/*.json.bad`, and delete what is not needed |
 
-### よくある症状
+### Common symptoms
 
-**記録されない。**
+**Nothing is recorded.**
 
-- `ccrec doctor` で `hooks installed` が `ok` かを確かめます。
-- プロジェクトやその上のディレクトリに `.ccrec-ignore` が無いか、`CCREC_DISABLE=1` が設定されていないかを確かめます。
-- `~/.ccrec/logs/ingest.log` に、取り込みを起動した時刻と結果が残っています。`~/.ccrec/logs/hook.err` にはフックのエラーが残ります。
+- Check that `ccrec doctor` says `ok` for `hooks installed`.
+- Check that there is no `.ccrec-ignore` in the project or above it, and that `CCREC_DISABLE=1` is not set.
+- `~/.ccrec/logs/ingest.log` has when ingests were started and what they did. `~/.ccrec/logs/hook.err` has the hooks' errors.
 
-**Node.js を入れ替えたら記録されなくなった。**
+**Recording stopped after Node.js was changed.**
 
-フックは、インストールしたときの Node.js の場所を覚えています。nvm などで Node.js のバージョンを変えた場合は、`ccrec` を入れ直してから `ccrec install-hooks` をもう一度実行してください。
+The hooks remember where Node.js was when they were installed. After changing its version with nvm or the like, install `ccrec` again and run `ccrec install-hooks` once more.
 
-**`ccrec ui` が「port 4127 is in use」と出る。**
+**`ccrec ui` says "port 4127 is in use".**
 
-すでに `ccrec ui` が動いているか、ほかのプログラムがそのポートを使っています。動いている方を止めるか、`ccrec ui --port 4200` のように別のポートを指定します。
+`ccrec ui` is already running, or another program has that port. Stop the one that is running, or give another port: `ccrec ui --port 4200`.
 
-**ブラウザに「Open the address that "ccrec ui" printed」と出る。**
+**The browser says "Open the address that "ccrec ui" printed".**
 
-トークンの無いアドレスを開いています。`ccrec ui` を起動し直した後は、前のアドレスは使えません。ターミナルに表示された新しいアドレスを開いてください。
+The address you opened has no token. After `ccrec ui` is started again, the earlier address no longer works. Open the new one printed on the terminal.
 
-**画面からの削除で「ほかの ccrec の処理が書き込み中です」と出る。**
+**Deleting from the browser says "Another ccrec process is writing".**
 
-ちょうど記録が走っています。数秒待ってから、もう一度削除してください。
+A recording is running at that moment. Wait a few seconds and delete again.
 
-**使用量や金額が空になっている。**
+**Usage or cost is empty.**
 
-- 金額は、Claude Code がそのセッションについて書き残したときだけ出ます。書き残されないセッションもあります。
-- 古い版で記録したセッションには、後から増えた項目が付いていません。そのセッションを消して `ccrec import` で取り込み直すと付きます。
+- The cost appears only when Claude Code wrote one down for the session. It does not for every session.
+- A session recorded by an older version lacks what was added later. Delete it and bring it in again with `ccrec import` to get it.
 
-## 10. コマンドとファイルの一覧
+## 10. Commands and files
 
-### コマンド
+### Commands
 
-| コマンド | 役割 |
+| Command | What it does |
 |---|---|
-| `ccrec init` | `~/.ccrec` と SQLite 用の設定を作る |
-| `ccrec install-hooks [--project \| --settings <ファイル>]` | 記録用のフックを追加する |
-| `ccrec uninstall-hooks [--project \| --settings <ファイル>]` | フックを外す |
-| `ccrec doctor` | 動く状態かを確かめる |
-| `ccrec whoami` | 記録が付くアカウントを表示する |
-| `ccrec import <ファイル\|ディレクトリ>...` | トランスクリプトを取り込む |
-| `ccrec ingest` | キューに残っている分を記録する（通常は自動） |
-| `ccrec ui [--port <n>] [--no-open]` | ブラウザで見る |
-| `ccrec sessions [--limit <n>] [--account <ID>] [--day <yyyymmdd> [--org <ID>]] [--json]` | セッションの一覧 |
-| `ccrec show <セッション ID> [--full] [--kind <種類,…>] [--json]` | やりとりの中身 |
-| `ccrec summary <セッション ID> [--json]` | セッションの要約 |
-| `ccrec usage [<セッション ID>...] [--json]` | モデル別の使用量 |
-| `ccrec delete <セッション ID>...` | セッションを消す |
-| `ccrec delete --before <yyyy-mm-dd> \| --older-than <n>d [--dry-run] [--account <ID>]` | 古いセッションをまとめて消す |
-| `ccrec version` | バージョンを表示する |
-| `ccrec help` | コマンドの説明を表示する |
+| `ccrec init` | Creates `~/.ccrec` with a configuration for SQLite |
+| `ccrec install-hooks [--project \| --settings <file>]` | Adds the recording hooks |
+| `ccrec uninstall-hooks [--project \| --settings <file>]` | Removes them |
+| `ccrec doctor` | Checks that everything is in place |
+| `ccrec whoami` | Shows the account recordings are filed under |
+| `ccrec import <file\|dir>...` | Records transcripts |
+| `ccrec ingest` | Records what is left in the queue (normally automatic) |
+| `ccrec ui [--port <n>] [--no-open]` | Opens the browser UI |
+| `ccrec sessions [--limit <n>] [--account <id>] [--day <yyyymmdd> [--org <id>]] [--json]` | Lists sessions |
+| `ccrec show <session-id> [--full] [--kind <kind,…>] [--json]` | Shows what was said and done |
+| `ccrec summary <session-id> [--json]` | Sums a session up |
+| `ccrec usage [<session-id>...] [--json]` | Usage per model |
+| `ccrec delete <session-id>...` | Deletes sessions |
+| `ccrec delete --before <yyyy-mm-dd> \| --older-than <n>d [--dry-run] [--account <id>]` | Deletes old sessions together |
+| `ccrec version` | Prints the version |
+| `ccrec help` | Describes the commands |
 
-### 環境変数
+### Environment variables
 
-| 変数 | 意味 |
+| Variable | Meaning |
 |---|---|
-| `CCREC_HOME` | データの場所（既定は `~/.ccrec`） |
-| `CCREC_ACCOUNT_ID` | 記録が付くアカウントの ID。`CCREC_ACCOUNT_EMAIL`、`CCREC_ACCOUNT_NAME`、`CCREC_ORG_ID`、`CCREC_ORG_NAME` も指定できる |
-| `CCREC_DISABLE=1` | 何も記録しない |
-| `CCREC_JAVA` | 使う `java` のパス（既定は `JAVA_HOME`、次に `PATH`） |
+| `CCREC_HOME` | Where the data lives (`~/.ccrec` by default) |
+| `CCREC_ACCOUNT_ID` | The id of the account recordings are filed under. `CCREC_ACCOUNT_EMAIL`, `CCREC_ACCOUNT_NAME`, `CCREC_ORG_ID` and `CCREC_ORG_NAME` can be given too |
+| `CCREC_DISABLE=1` | Record nothing |
+| `CCREC_JAVA` | The `java` to use (by default `JAVA_HOME`, then `PATH`) |
 
-### ファイル
+### Files
 
-| 場所 | 中身 |
+| Where | What |
 |---|---|
-| `~/.ccrec/ccrec.sqlite3` | 記録したデータ（SQLite の場合） |
-| `~/.ccrec/database.properties` | 保存先の設定 |
-| `~/.ccrec/config.json` | 記録の設定（`recordThinking`、`redact`、`exclude`） |
-| `~/.ccrec/spool/` | フックが置く記録の依頼と、その状態 |
-| `~/.ccrec/logs/ingest.log` | 取り込みを起動した時刻と結果 |
-| `~/.ccrec/logs/hook.err` | フックのエラー |
-| `~/.ccrec/drivers/` | 追加の JDBC ドライバーを置く場所 |
-| `~/.claude/settings.json` | Claude Code の設定。フックが入る |
-| `~/.claude/settings.json.ccrec-bak` | フックを入れる前の設定 |
+| `~/.ccrec/ccrec.sqlite3` | What was recorded (with SQLite) |
+| `~/.ccrec/database.properties` | Where it records |
+| `~/.ccrec/config.json` | The recording settings (`recordThinking`, `redact`, `exclude`, `localMcpServers`) |
+| `~/.ccrec/spool/` | The requests the hooks leave, and their state |
+| `~/.ccrec/logs/ingest.log` | When ingests were started and what they did |
+| `~/.ccrec/logs/hook.err` | The hooks' errors |
+| `~/.ccrec/drivers/` | Where further JDBC drivers go |
+| `~/.claude/settings.json` | Claude Code's settings; the hooks go here |
+| `~/.claude/settings.json.ccrec-bak` | The settings as they were before the hooks |

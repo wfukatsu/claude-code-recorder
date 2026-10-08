@@ -1,112 +1,114 @@
 # claude-code-recorder
 
-Claude Code でのやりとりを、アカウント単位でデータベースに記録し、ブラウザやコマンドで見返せるようにするツールです。コマンド名は `ccrec` です。
+English | [日本語](README.ja.md)
 
-- **記録するもの**: プロンプト、応答、thinking、ツールの入出力、システムプロンプト、注入されたコンテキスト、トークン使用量とモデル、所要時間、Claude Code が書き残した金額など。サブエージェントや MCP のツール呼び出しも含みます。
-- **記録のしかた**: Claude Code のフックが応答のたびに差分を記録します。Claude Code を待たせず、何度取り込んでも重複しません。
-- **保存先**: [ScalarDB](https://scalardb.scalar-labs.com/) 経由で、最初は端末内の SQLite です。設定ファイルの差し替えで PostgreSQL などに切り替えられます。
-- **見かた**: `ccrec ui` でブラウザに一覧、やりとり、使用量のグラフを表示します。日本語と英語を切り替えられます。
+Records what happens in Claude Code, per account, into a database, and lets you look back at it in a browser or from the command line. The command is `ccrec`.
 
-![セッション詳細](docs/images/ui-session.jpg)
+- **What it records**: prompts, responses, thinking, tool inputs and outputs, the system prompt, injected context, token usage and models, durations, the cost Claude Code itself writes down. Sub-agents and MCP tool calls are included.
+- **How it records**: Claude Code's hooks record what is new after every response. Claude Code is never kept waiting, and nothing is recorded twice however often a transcript is read.
+- **Where it records**: through [ScalarDB](https://scalardb.scalar-labs.com/), into SQLite on your machine at first. Replacing one configuration file points it at PostgreSQL or another database.
+- **How you look at it**: `ccrec ui` shows the sessions, the conversations and usage charts in a browser, in English or Japanese.
 
-## ドキュメント
+![A session](docs/images/en/ui-session.jpg)
 
-| 文書 | 内容 |
+## Documents
+
+| Document | What is in it |
 |---|---|
-| [操作マニュアル](docs/manual.md) | インストール、日々の使い方、ブラウザの画面、削除、困ったときの対処 |
-| [リファレンス](docs/reference.md) | 記録する内容とテーブル、設定の詳細、保存先の切り替え、開発とリリース |
+| [Manual](docs/manual.md) | Installing, daily use, the browser screens, deleting, troubleshooting |
+| [Reference](docs/reference.md) | What is recorded and the tables, the settings in detail, changing the database, development and releases |
 
-## 必要なもの
+## Requirements
 
-- Node.js 18 以降
-- Java 17 以降（実行環境。記録エンジンが ScalarDB の Java API を使うため）
+- Node.js 18 or later
+- Java 17 or later (a runtime; the recording engine uses ScalarDB's Java API)
 
-## インストール
+## Installing
 
-配布パッケージを GitHub のリリースから取得して、`npm install` で入れます。パッケージにはビルド済みのエンジンが入っているので、JDK は要りません。
+Get the package from the GitHub release and install it with `npm install`. The package carries the built engine, so no JDK is needed.
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
 npm install -g ./claude-code-recorder-1.0.0.tgz
 ```
 
-リポジトリから直接入れることもできます。この場合はインストール時にエンジンをビルドするので、JDK 17 以降とネットワーク接続が必要です。
+It can also be installed straight from the repository. The engine is then built during the install, which needs JDK 17 or later and a network connection.
 
 ```bash
 npm install -g github:wfukatsu/claude-code-recorder
 ```
 
-npm のレジストリには公開していません。
+It is not published to the npm registry.
 
-## はじめかた
-
-```bash
-ccrec init            # ~/.ccrec を作る（SQLite に記録する設定つき）
-ccrec install-hooks   # Claude Code に記録用のフックを追加する
-ccrec doctor          # 動く状態かを確かめる
-```
-
-これ以降、Claude Code が応答を終えるたびに自動で記録されます。フックを入れる前のやりとりは、`ccrec import ~/.claude/projects/<プロジェクト>/` で取り込めます。
+## Getting started
 
 ```bash
-ccrec ui              # ブラウザで見る
+ccrec init            # create ~/.ccrec, set up to record into SQLite
+ccrec install-hooks   # add the recording hooks to Claude Code
+ccrec doctor          # check that everything is in place
 ```
 
-## コマンド
-
-| コマンド | 役割 |
-|---|---|
-| `ccrec init` / `install-hooks` / `uninstall-hooks` / `doctor` | 準備と確認 |
-| `ccrec whoami` | 記録が付くアカウントを表示する |
-| `ccrec import <ファイル\|ディレクトリ>...` | 既存のトランスクリプトを取り込む |
-| `ccrec ui [--port <n>] [--no-open]` | ブラウザで見る |
-| `ccrec sessions` | セッションの一覧 |
-| `ccrec show <セッション ID>` | やりとりの中身 |
-| `ccrec summary <セッション ID>` | セッションの要約（金額、所要時間、ターン、ツール、使用量） |
-| `ccrec usage [<セッション ID>...]` | モデル別のトークン使用量 |
-| `ccrec delete <セッション ID>...` | セッションを消す |
-| `ccrec delete --older-than <n>d [--dry-run]` | 古いセッションをまとめて消す |
-| `ccrec version` / `help` | バージョン、コマンドの説明 |
-
-オプションと出力の例は、[操作マニュアル](docs/manual.md#4-コマンドで見る) にあります。
-
-## ブラウザの画面
-
-`ccrec ui` はこの端末でサーバーを起動し、ブラウザを開きます。Ctrl-C で止まります。
-
-| 画面 | できること |
-|---|---|
-| セッション一覧 | 期間、プロジェクト、タイトルで絞り込む。複数選んで削除する |
-| セッション詳細 | 整形されたやりとりを読む。この端末と Claude 以外に届いた通信（Web、シェル、MCP）を送信先ごとにまとめて見る。使用量、ツール別の回数、付帯情報を見る。削除する |
-| 使用量 | 日ごとの使用量をモデル別のグラフで見る。モデル別、プロジェクト別の合計を見る |
-| 状態 | フック、未記録のセッション、保存先、取り込みログを確かめる |
-
-サーバーは `127.0.0.1` だけで待ち受け、起動のたびに変わるトークンの無い要求には応えません。表示されるアドレスにはトークンが入っているので、人に渡さないでください。
-
-## 記録しない範囲を決める
-
-| やりたいこと | 方法 |
-|---|---|
-| 一時的に何も記録しない | 環境変数 `CCREC_DISABLE=1` |
-| あるプロジェクトを記録しない | プロジェクトの直下に `.ccrec-ignore` を置く |
-| thinking や特定の種類を記録しない | `~/.ccrec/config.json` の `recordThinking`、`exclude` |
-
-記録する前に、既知の形式の認証情報（主なサービスのトークン、秘密鍵、URL の中のパスワードなど）を `[REDACTED]` に置き換えます。誤って伏せないことを優先しているので、それ以外の形のものは残ります。
-
-## 注意
-
-- **記録には、ソースコードや伏せきれなかった認証情報が入ります。** `~/.ccrec` は所有者だけが読み書きできる権限で作られます。
-- **アカウントは端末側の自己申告です。** 複数人の記録を 1 つのデータベースに集める場合は、収集側で送信者を認証する仕組みが別に要ります。その仕組み（全社収集）は、このツールにはまだありません。
-- **全社で記録する場合は、従業員への周知と保持期間の取り決めが前提です。**
-- **SQLite は個人の端末向けです。** ScalarDB は SQLite を開発・テスト用途としています。複数人の集約先には使わないでください。
-- **Windows と、SQLite 以外のデータベースでは動作を確認していません。**
-
-## 開発
+From here on, every response of Claude Code is recorded as it ends. What happened before the hooks were installed can be brought in with `ccrec import ~/.claude/projects/<project>/`.
 
 ```bash
-npm run build   # engine/ を Gradle でビルドし lib/ccrec-engine.jar を作る
-npm test        # Node のテストと、SQLite 上の実 ScalarDB を使う Java のテスト
-npm pack        # 配布パッケージ（.tgz）を作る
+ccrec ui              # look at it in a browser
 ```
 
-構成、依存バージョン、リリースの手順は [リファレンス](docs/reference.md#開発) にあります。
+## Commands
+
+| Command | What it does |
+|---|---|
+| `ccrec init` / `install-hooks` / `uninstall-hooks` / `doctor` | Setting up and checking |
+| `ccrec whoami` | Shows the account recordings are filed under |
+| `ccrec import <file\|dir>...` | Records existing transcripts |
+| `ccrec ui [--port <n>] [--no-open]` | Opens the browser UI |
+| `ccrec sessions` | Lists sessions |
+| `ccrec show <session-id>` | Shows what was said and done in a session |
+| `ccrec summary <session-id>` | Sums a session up: cost, durations, turns, tools, usage |
+| `ccrec usage [<session-id>...]` | Token usage per model |
+| `ccrec delete <session-id>...` | Deletes sessions |
+| `ccrec delete --older-than <n>d [--dry-run]` | Deletes old sessions together |
+| `ccrec version` / `help` | The version; the commands |
+
+Options and sample output are in the [manual](docs/manual.md#4-looking-from-the-command-line).
+
+## The browser screens
+
+`ccrec ui` starts a server on this machine and opens a browser. Ctrl-C stops it.
+
+| Screen | What you can do |
+|---|---|
+| Sessions | Filter by period, project and title. Select several and delete them |
+| A session | Read the conversation, laid out. See what reached beyond this machine and Claude (web, shell, MCP) gathered by destination. See usage, calls per tool and details. Delete it |
+| Usage | See usage per day as a chart by model, and totals by model and by project |
+| Status | Check the hooks, sessions not yet recorded, where it records, and the ingest log |
+
+The server listens on `127.0.0.1` only and answers no request without the token it issues at each start. The address it prints carries that token: do not hand it to anyone.
+
+## Choosing what is not recorded
+
+| To | Do this |
+|---|---|
+| Record nothing for a while | Set the environment variable `CCREC_DISABLE=1` |
+| Leave a project out | Put a file named `.ccrec-ignore` at the top of the project |
+| Leave out thinking, or some kinds of record | Set `recordThinking` or `exclude` in `~/.ccrec/config.json` |
+
+Before anything is stored, credentials of well-known shapes (the tokens of major services, private keys, a password inside a URL and so on) are replaced with `[REDACTED]`. It prefers leaving something in over masking by mistake, so credentials of other shapes remain.
+
+## Cautions
+
+- **Recordings contain source code, and credentials the masking missed.** `~/.ccrec` is created readable and writable by its owner only.
+- **The account is what the machine says it is.** Gathering several people's recordings in one database needs something on the collecting side that authenticates the sender. That part — company-wide collection — is not in this tool yet.
+- **Recording across a company presupposes that the employees are told, and that a retention period is agreed.**
+- **SQLite is for one person's machine.** ScalarDB treats SQLite as a development and test store. Do not use it as the place several people's recordings are gathered.
+- **It has not been tried on Windows, nor against a database other than SQLite.**
+
+## Development
+
+```bash
+npm run build   # build engine/ with Gradle into lib/ccrec-engine.jar
+npm test        # the Node tests, and the Java tests on a real ScalarDB over SQLite
+npm pack        # make the package (.tgz)
+```
+
+The layout, the dependency versions and the release steps are in the [reference](docs/reference.md#development).

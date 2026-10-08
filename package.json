@@ -29,7 +29,8 @@
     "src",
     "lib/ccrec-engine.jar",
     "docs",
-    "README.md"
+    "README.md",
+    "README.ja.md"
   ],
   "engines": {
     "node": ">=18"
