@@ -40,6 +40,8 @@ Reading
 Deleting
   ccrec delete <session-id>...   delete recorded sessions for good, with the contents no other
                                  session uses; the hooks stop recording them ("import" still can)
+  ccrec delete --before <yyyy-mm-dd> | --older-than <n>d  [--dry-run] [--account <id>]
+                                 … your sessions with no activity since then; --dry-run lists them
 
 Environment
   CCREC_HOME        data directory (default ~/.ccrec)

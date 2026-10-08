@@ -301,4 +301,46 @@ class MainTest {
 
     assertTrue(printed(1, "summary", "nope", "--account", "acct-1", "--home", home.toString()).contains("not recorded"));
   }
+
+  @Test
+  void sessionsAreDeletedByHowLongAgoTheyWereLastActive(@TempDir Path dir) throws IOException {
+    Path home = home(dir);
+    Path spool = home.resolve("spool");
+    // Both were last active on 2026-10-07; one is still held by the hooks.
+    queue(home, "old-one", transcript(dir, "old-one"), true, null);
+    queue(home, "old-two", transcript(dir, "old-two"), false, null);
+    assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
+    String[] common = {"--account", "acct-1", "--home", home.toString()};
+
+    String none = printed(0, "delete", "--before", "2026-10-07", common[0], common[1], common[2], common[3]);
+    assertTrue(none.contains("0 sessions of acct-1"), none);
+    assertEquals(2, sessions(home).size());
+
+    String listed = printed(0, "delete", "--older-than", "0d", "--dry-run", common[0], common[1], common[2], common[3]);
+    assertTrue(listed.contains("old-one") && listed.contains("old-two"), listed);
+    assertTrue(listed.contains("2 sessions of acct-1") && listed.contains("nothing deleted"), listed);
+    assertEquals(2, sessions(home).size(), "a dry run deletes nothing");
+
+    String deleted = printed(0, "delete", "--before", "2026-10-09", common[0], common[1], common[2], common[3]);
+    assertTrue(deleted.contains("deleted 2 sessions  records=2"), deleted);
+    assertTrue(sessions(home).isEmpty());
+    assertFalse(Files.exists(spool.resolve("old-two.json")));
+    assertTrue(Files.exists(spool.resolve("old-two.ignored")), "the hooks held it, so they are told to let go");
+    assertFalse(Files.exists(spool.resolve("old-one.ignored")), "nothing is left behind for one long over");
+
+    for (String[] wrong :
+        new String[][] {
+          {"delete"}, {"delete", "s1", "--before", "2026-10-09"}, {"delete", "--older-than", "90"},
+          {"delete", "--before", "yesterday"}, {"delete", "--before", "2026-10-09", "--older-than", "1d"}
+        }) {
+      String[] args = java.util.stream.Stream.concat(java.util.Arrays.stream(wrong), java.util.Arrays.stream(common)).toArray(String[]::new);
+      String message = "";
+      try {
+        Main.run(args);
+      } catch (RuntimeException e) {
+        message = e.getClass().getSimpleName();
+      }
+      assertEquals("UsageException", message, String.join(" ", wrong));
+    }
+  }
 }

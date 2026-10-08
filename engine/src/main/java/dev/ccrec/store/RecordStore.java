@@ -87,7 +87,17 @@ public interface RecordStore extends AutoCloseable {
    * @param hostId where else to look for the ingest positions, besides the host the session row
    *     names; may be null
    */
-  Deleted deleteSession(String sessionId, String accountId, String hostId);
+  default Deleted deleteSession(String sessionId, String accountId, String hostId) {
+    return deleteSessions(List.of(sessionId), accountId, hostId).get(sessionId);
+  }
+
+  /**
+   * {@link #deleteSession} for several sessions at once, which reads the records only once to tell
+   * what content sessions outside the deletion still use.
+   *
+   * @return what was removed of each session, in the order given
+   */
+  Map<String, Deleted> deleteSessions(List<String> sessionIds, String accountId, String hostId);
 
   @Override
   void close();
