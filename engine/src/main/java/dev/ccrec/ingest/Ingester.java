@@ -47,6 +47,7 @@ public final class Ingester {
   private final Redactor redactor;
   private final Syncer syncer;
   private final boolean recordThinking;
+  private final Set<String> excluded;
   private final String hostId;
   private final TranscriptParser parser = new TranscriptParser();
 
@@ -54,11 +55,26 @@ public final class Ingester {
 
   public Ingester(
       RecordStore store, Redactor redactor, Syncer syncer, boolean recordThinking, String hostId) {
+    this(store, redactor, syncer, recordThinking, hostId, Set.of());
+  }
+
+  /**
+   * @param excluded what is not to be recorded: a kind ({@code thinking}), or a kind and subtype
+   *     ({@code context/hook_success})
+   */
+  public Ingester(
+      RecordStore store,
+      Redactor redactor,
+      Syncer syncer,
+      boolean recordThinking,
+      String hostId,
+      Set<String> excluded) {
     this.store = store;
     this.redactor = redactor;
     this.syncer = syncer;
     this.recordThinking = recordThinking;
     this.hostId = Account.keySafe(hostId);
+    this.excluded = Set.copyOf(excluded);
   }
 
   /**
@@ -240,6 +256,9 @@ public final class Ingester {
           for (TranscriptParser.Block block : line.blocks()) {
             int thisBlock = blockNo++;
             if (!recordThinking && block.kind().equals(TranscriptParser.THINKING)) {
+              continue;
+            }
+            if (excluded.contains(block.kind()) || excluded.contains(block.kind() + "/" + block.subtype())) {
               continue;
             }
             if (block.kind().equals(TranscriptParser.PR_LINK)) {

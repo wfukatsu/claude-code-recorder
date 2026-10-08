@@ -81,6 +81,7 @@ test('the hook queues the session and keeps the account it started with', async 
     assert.equal(await runHook(event('SessionStart')), 0);
     assert.equal(queued().account.account_id, 'acct-1');
     assert.equal(queued().ended, false);
+    assert.equal(queued().last_event, 'SessionStart');
 
     // The login changes mid-session; the session stays with the account that started it.
     fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'acct-2' } }));
@@ -244,6 +245,8 @@ test('an event asks for an ingest only when the transcripts were written to sinc
     fs.writeFileSync(path.join(subagents, 'agent-a1.jsonl'), '{}\n');
     at(path.join(subagents, 'agent-a1.jsonl'), recorded + 2000.5);
     assert.equal(writtenSince(transcript, 'sess-q', recorded), true);
+    // A request is told from the one before by its time, to the millisecond.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await runHook(event('SubagentStop'));
     assert.notEqual(requested(), first);
 

@@ -119,6 +119,8 @@ export async function runHook(input) {
       account: identity.account,
       ended: event.hook_event_name === 'SessionEnd',
       updated_at: now,
+      // For whoever reads the queue: Claude Code fires more events than the ones that get an ingest.
+      last_event: event.hook_event_name ?? null,
       // Compared with the engine's <session>.done mark: later than it means not yet recorded.
       ingest_requested_at: asks ? now : (queued.ingest_requested_at ?? null),
     };
