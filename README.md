@@ -73,7 +73,7 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 | `ingest_state` | `host_id` | `source_path_hash` | 取り込み済みの位置 |
 | `session_usage` | `session_id` | `model` | セッション × モデルの API 応答数、トークン数、Web 検索・取得回数の合計 |
 
-`messages.kind` は `user_prompt` / `user_meta` / `assistant_text` / `thinking` / `tool_use` / `tool_result` / `system_prompt` / `tool_definitions` / `context` / `system` / `cost` / `pr_link` / `unknown` です。ここに無い種類のブロック（画像など）は `user_<type>` / `assistant_<type>` として保存します。
+`messages.kind` は `user_prompt` / `user_meta` / `assistant_text` / `thinking` / `tool_use` / `tool_result` / `system_prompt` / `tool_definitions` / `context` / `system` / `cost` / `pr_link` / `mcp_meta` / `unknown` です。ここに無い種類のブロック（画像など）は `user_<type>` / `assistant_<type>` として保存します。
 
 Claude Code は 1 回の API 応答をブロックごとの複数行に分けて書き、どの行にも同じトークン数を付けます。トークン数は `message_id` ごとに最初の 1 行にだけ記録するので、そのまま合計できます。
 
@@ -101,6 +101,7 @@ Claude Code は 1 回の API 応答をブロックごとの複数行に分けて
 - 金額（`cost`）は、Claude Code 自身がトランスクリプトに書いた累計です。このツールは単価を持たず、計算もしません。書かれないセッションもあり、その場合は空です。最新の値をセッション行にも持ち、モデル別の内訳は `cost` レコードの本文に入っています。
 - `ccrec summary <session-id>` は、これらをセッション単位にまとめて表示します。ターン数と所要時間、終了理由の内訳、API エラー、ツールごとの呼び出し回数とエラー回数、権限モード、使ったスキル・プラグイン・MCP サーバー、作成した PR などです。サブエージェントの分を含みます。
 - `summary` の `prompts` は、人または Claude Code を動かすプログラムが送ったプロンプトの数です（`prompt_source` が `typed` / `suggestion_accepted` / `queued` / `sdk`、または `origin` が `human`）。バックグラウンドタスクの通知や圧縮後の要約のように Claude Code 自身が書いた分は数えず、内訳を `promptSources` に出します。
+- MCP のツール呼び出しは、ほかのツールと同じく `tool_use`（ツール名は `mcp__<サーバー>__<ツール>`）と `tool_result` として記録します。サーバーがテキストとは別に返した構造化データとメタデータ（`mcpMeta`）は、`mcp_meta` として同じ `tool_use_id` で保存します。`summary` の `mcpServers` は、ツール名から数えたサーバーごとの呼び出し回数です。MCP サーバーとの通信そのものや、サーバー側の所要時間は記録しません。
 - `--json` のキーは、ほかのコマンドと同じ camelCase です（`costUsd`、`turnDurationMs` など）。`messages.attributes` の中身は、保存した値なので snake_case のままです。
 - これらを記録する前に取り込んだ行には付きません。付け直すには、`ccrec delete <session-id>` のあと `ccrec import` で取り込み直してください。
 

@@ -575,7 +575,8 @@ public final class Main {
     Map<String, Long> apiErrors = new java.util.TreeMap<>();
     Map<String, Long> denials = new java.util.TreeMap<>();
     Map<String, Set<String>> named = new LinkedHashMap<>();
-    for (String key : List.of("permission_mode", "skill", "plugin", "mcp_server", "command")) {
+    Map<String, Long> mcpServers = new java.util.TreeMap<>();
+    for (String key : List.of("permission_mode", "skill", "plugin", "command")) {
       named.put(key, new java.util.TreeSet<>());
     }
     Set<String> pullRequests = new java.util.LinkedHashSet<>();
@@ -603,6 +604,12 @@ public final class Main {
         case "tool_use" -> {
           String tool = m.toolName() != null ? m.toolName() : "unknown";
           tools.computeIfAbsent(tool, k -> new long[2])[0]++;
+          // An MCP tool is named mcp__<server>__<tool>. Claude Code also names the server on the
+          // line, but not on every one and not by the same name, so the tool's name is what counts.
+          String[] mcp = tool.split("__", 3);
+          if (mcp.length == 3 && mcp[0].equals("mcp")) {
+            mcpServers.merge(mcp[1], 1L, Long::sum);
+          }
           if (m.toolUseId() != null) {
             toolOfCall.put(m.toolUseId(), tool);
           }
@@ -667,7 +674,7 @@ public final class Main {
     summary.set("permissionModes", JSON.valueToTree(named.get("permission_mode")));
     summary.set("skills", JSON.valueToTree(named.get("skill")));
     summary.set("plugins", JSON.valueToTree(named.get("plugin")));
-    summary.set("mcpServers", JSON.valueToTree(named.get("mcp_server")));
+    summary.set("mcpServers", JSON.valueToTree(mcpServers));
     summary.set("commands", JSON.valueToTree(named.get("command")));
     summary.set("pullRequests", JSON.valueToTree(pullRequests));
     ArrayNode toolRows = summary.putArray("tools");
