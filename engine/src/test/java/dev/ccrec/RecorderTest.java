@@ -446,8 +446,10 @@ class RecorderTest {
       ingester(store, true).ingestSession(transcript, SESSION, ALICE);
       Files.writeString(transcript, PROMPT + "\n", StandardOpenOption.APPEND);
       ingester(store, true).ingestSession(transcript, SESSION, ALICE);
-      assertEquals(1.25, store.session(SESSION, "acct-alice").orElseThrow().costUsd());
       assertEquals("cli", store.session(SESSION, null).orElseThrow().entrypoint());
+      assertEquals(1.25, store.session(SESSION, "acct-alice").orElseThrow().costUsd());
+      store.deleteSession(SESSION, null, null);
+      assertTrue(store.session(SESSION, "acct-alice").isEmpty(), "found by its id no longer");
     }
   }
 

@@ -67,6 +67,7 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 | `accounts` | `account_id` | – | メール、表示名、組織 |
 | `sessions` | `account_id` | `started_at` 降順, `session_id` | プロジェクト、ブランチ、モデル、タイトル、起動元、金額、API とツールの所要時間、変更行数 |
 | `sessions_by_day` | `org_id`, `day` | `started_at`, `session_id` | 組織 × 日の索引 |
+| `sessions_by_id` | `session_id` | – | セッション ID からセッション行を引く索引 |
 | `messages` | `session_id` | `agent_id`, `line_no`, `block_no` | 種別、ツール名、`message_id`、トークン数など、付帯情報（`attributes`）、本文のハッシュと先頭 1,000 文字 |
 | `contents` | `content_hash` | `chunk_no` | 本文（gzip、6,000 バイト以下のチャンク） |
 | `ingest_state` | `host_id` | `source_path_hash` | 取り込み済みの位置 |
@@ -92,13 +93,15 @@ Claude Code は 1 回の API 応答をブロックごとの複数行に分けて
 | 行の種類 | 項目 |
 |---|---|
 | 応答 | `stop_reason`、`request_id`、`effort`、`thinking_ms`、`service_tier`、`speed`、`api_error`、`api_error_status`、`skill`、`plugin`、`mcp_server`、`mcp_tool` |
-| プロンプト・ツール結果 | `permission_mode`、`prompt_source`、`tool_denial`、`interrupted`、`compact_summary`、`file_path`、`lines_added`、`lines_removed`、`status`、`agent_id`、`resolved_model`、`tool_interrupted` |
+| プロンプト・ツール結果 | `permission_mode`、`prompt_source`、`origin`、`tool_denial`、`interrupted`、`compact_summary`、`file_path`、`lines_added`、`lines_removed`、`status`、`agent_id`、`resolved_model`、`tool_interrupted` |
 | `system` | ターンの `duration_ms` と `message_count`、フックの `hook_count` / `hook_errors` / `prevented_continuation`、圧縮の `compact_trigger` / `pre_tokens` / `post_tokens`、実行した `command` |
 | `cost` | `cost_usd`、`api_ms`、`tool_ms`、`duration_ms`、`lines_added`、`lines_removed` |
 | `pr_link` | `pr_number`、`pr_repository`、`pr_url` |
 
 - 金額（`cost`）は、Claude Code 自身がトランスクリプトに書いた累計です。このツールは単価を持たず、計算もしません。書かれないセッションもあり、その場合は空です。最新の値をセッション行にも持ち、モデル別の内訳は `cost` レコードの本文に入っています。
 - `ccrec summary <session-id>` は、これらをセッション単位にまとめて表示します。ターン数と所要時間、終了理由の内訳、API エラー、ツールごとの呼び出し回数とエラー回数、権限モード、使ったスキル・プラグイン・MCP サーバー、作成した PR などです。サブエージェントの分を含みます。
+- `summary` の `prompts` は、人または Claude Code を動かすプログラムが送ったプロンプトの数です（`prompt_source` が `typed` / `suggestion_accepted` / `queued` / `sdk`、または `origin` が `human`）。バックグラウンドタスクの通知や圧縮後の要約のように Claude Code 自身が書いた分は数えず、内訳を `promptSources` に出します。
+- `--json` のキーは、ほかのコマンドと同じ camelCase です（`costUsd`、`turnDurationMs` など）。`messages.attributes` の中身は、保存した値なので snake_case のままです。
 - これらを記録する前に取り込んだ行には付きません。付け直すには、`ccrec delete <session-id>` のあと `ccrec import` で取り込み直してください。
 
 本文は SHA-256 で内容アドレス化しているので、セッションをまたいで同じシステムプロンプトや CLAUDE.md は 1 件にまとまります。
@@ -154,7 +157,7 @@ scalar.db.transaction_manager=consensus-commit
 
 ```bash
 npm run build   # engine/ を Gradle でビルドし lib/ccrec-engine.jar を作る
-npm test        # Node のテストと、SQLite 上の実 ScalarDB を使う Java のテスト
+npm test        # Node のテストと、SQLite 上の実 ScalarDB を使う Java のテスト（GitHub Actions でも実行）
 npm pack        # 配布用 .tgz（ビルド込み）
 ```
 

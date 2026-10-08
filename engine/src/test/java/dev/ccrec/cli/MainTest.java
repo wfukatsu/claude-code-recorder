@@ -215,7 +215,9 @@ class MainTest {
         transcript,
         String.join(
                 "\n",
-                String.format(LINE, "/work/app").strip(),
+                String.format(LINE, "/work/app").strip().replace("\"type\":\"user\"", "\"type\":\"user\",\"promptSource\":\"typed\""),
+                "{\"type\":\"user\",\"promptSource\":\"system\",\"origin\":{\"kind\":\"task-notification\"},"
+                    + "\"message\":{\"role\":\"user\",\"content\":\"a background task finished\"}}",
                 assistant("msg_1", "claude-opus-5-5", "tool_use", "{\"type\":\"thinking\",\"thinking\":\"\"}", ",\"thinkingDurationMs\":3000"),
                 assistant("msg_1", "claude-opus-5-5", "tool_use", "{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{}}", ""),
                 String.format(result, "t1", "true"),
@@ -266,18 +268,20 @@ class MainTest {
 
     JsonNode summary =
         new ObjectMapper().readTree(printed(0, "summary", "busy", "--json", "--account", "acct-1", "--home", home.toString()));
-    assertEquals("acct-1", summary.path("account_id").asText());
-    assertEquals(1.5, summary.path("cost_usd").asDouble());
-    assertEquals(61000, summary.path("api_duration_ms").asLong());
-    assertEquals(12, summary.path("lines_added").asLong());
-    assertEquals(1, summary.path("prompts").asInt());
+    assertEquals("acct-1", summary.path("accountId").asText());
+    assertEquals(1.5, summary.path("costUsd").asDouble());
+    assertEquals(61000, summary.path("apiDurationMs").asLong());
+    assertEquals(12, summary.path("linesAdded").asLong());
+    assertEquals(1, summary.path("prompts").asInt(), "what somebody typed, not what Claude Code wrote itself");
+    assertEquals(1, summary.path("promptSources").path("typed").asInt());
+    assertEquals(1, summary.path("promptSources").path("system").asInt());
     assertEquals(1, summary.path("turns").asInt());
-    assertEquals(65000, summary.path("turn_duration_ms").asLong());
-    assertEquals(3000, summary.path("thinking_duration_ms").asLong(), "said by a line that left no record");
-    assertEquals(2, summary.path("stop_reasons").path("tool_use").asInt(), "per API message, not per record");
-    assertEquals(1, summary.path("stop_reasons").path("end_turn").asInt());
-    assertEquals("acceptEdits", summary.path("permission_modes").get(0).asText());
-    assertEquals(1, summary.path("pull_requests").size());
+    assertEquals(65000, summary.path("turnDurationMs").asLong());
+    assertEquals(3000, summary.path("thinkingDurationMs").asLong(), "said by a line that left no record");
+    assertEquals(2, summary.path("stopReasons").path("tool_use").asInt(), "per API message, not per record");
+    assertEquals(1, summary.path("stopReasons").path("end_turn").asInt());
+    assertEquals("acceptEdits", summary.path("permissionModes").get(0).asText());
+    assertEquals(1, summary.path("pullRequests").size());
     assertEquals("Bash", summary.path("tools").get(0).path("tool").asText());
     assertEquals(2, summary.path("tools").get(0).path("calls").asInt());
     assertEquals(1, summary.path("tools").get(0).path("errors").asInt());
