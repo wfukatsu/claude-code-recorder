@@ -117,4 +117,6 @@ The layout, the dependency versions and the release steps are in the [reference]
 
 ## License
 
+Copyright 2026 Wataru Fukatsu (Scalar, Inc.)
+
 [Apache License 2.0](LICENSE). The package bundles third-party libraries under their own licenses, listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
