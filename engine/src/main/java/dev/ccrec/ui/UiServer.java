@@ -6,6 +6,7 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import dev.ccrec.cli.IngestLock;
 import dev.ccrec.cli.SessionSummary;
 import dev.ccrec.cli.SpoolQueue;
 import dev.ccrec.model.Account;
@@ -37,6 +38,8 @@ import java.util.concurrent.Executors;
  * The browser UI: a few static files and a JSON API over a {@link RecordStore}, for the person at
  * this machine only.
  *
+ * <p>It reads, with one exception: sessions can be deleted from it, as from the command line.
+ *
  * <p>What is recorded includes source code and whatever credentials slipped past the redactor, and
  * a browser is where other people's pages run. So the server listens on the loopback address alone,
  * answers only to the {@code Host} it was started as (a page elsewhere cannot reach it by pointing a
@@ -51,6 +54,10 @@ public final class UiServer implements AutoCloseable {
   /** What a list row shows of a record's text; the whole text is fetched when the row is opened. */
   private static final int LISTED_CHARS = 300;
   private static final int LOG_LINES = 60;
+  private static final int MAX_BODY_BYTES = 64 * 1024;
+  private static final int MAX_DELETED_AT_ONCE = 50;
+  /** An ingest takes seconds; a click should not wait for a minute as a hook's ingest would. */
+  private static final long LOCK_WAIT_MILLIS = 10_000;
 
   private static final Map<String, String> STATIC =
       Map.of(
@@ -153,6 +160,10 @@ public final class UiServer implements AutoCloseable {
         text(exchange, 401, "Open the address that \"ccrec ui\" printed: it carries this run's token.");
         return;
       }
+      if (exchange.getRequestMethod().equals("POST") && path.equals("/api/sessions/delete")) {
+        delete(exchange);
+        return;
+      }
       if (!exchange.getRequestMethod().equals("GET")) {
         text(exchange, 405, "GET only");
         return;
@@ -204,6 +215,68 @@ public final class UiServer implements AutoCloseable {
 
   private static String decode(String value) {
     return URLDecoder.decode(value, StandardCharsets.UTF_8);
+  }
+
+  // ---- the one request that changes anything ------------------------------------------------
+
+  /**
+   * Deletes the sessions named in the body, as {@code ccrec delete} does. Beyond the token, the
+   * request has to be one only this page's script can make: JSON, with a header of ours, from our
+   * own origin — a form on another site can send none of the three.
+   */
+  private void delete(HttpExchange exchange) throws IOException {
+    String origin = exchange.getRequestHeaders().getFirst("Origin");
+    String contentType = String.valueOf(exchange.getRequestHeaders().getFirst("Content-Type"));
+    if (!"1".equals(exchange.getRequestHeaders().getFirst("X-Ccrec-Ui"))
+        || !contentType.startsWith("application/json")
+        || origin != null && !Set.of("http://127.0.0.1:" + port(), "http://localhost:" + port()).contains(origin)) {
+      json(exchange, 403, JSON.createObjectNode().put("error", "not a request from the ccrec ui page"));
+      return;
+    }
+    if (home == null) {
+      json(exchange, 409, JSON.createObjectNode().put("error", "this server was started without a home to lock"));
+      return;
+    }
+    JsonNode body;
+    try {
+      body = JSON.readTree(exchange.getRequestBody().readNBytes(MAX_BODY_BYTES));
+    } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+      body = null;
+    }
+    List<String> sessionIds = new java.util.ArrayList<>();
+    if (body != null) {
+      body.path("sessionIds").forEach(id -> sessionIds.add(id.asText()));
+    }
+    if (sessionIds.isEmpty() || sessionIds.size() > MAX_DELETED_AT_ONCE || sessionIds.stream().anyMatch(String::isBlank)) {
+      json(exchange, 400, JSON.createObjectNode().put("error", "sessionIds: 1 to " + MAX_DELETED_AT_ONCE + " session ids"));
+      return;
+    }
+    ObjectNode answer = JSON.createObjectNode();
+    ArrayNode deleted = answer.putArray("deleted");
+    // One deletion at a time in this process; the file lock keeps the other processes out.
+    synchronized (this) {
+      try (java.nio.channels.FileChannel channel = IngestLock.open(home);
+          java.nio.channels.FileLock lock = IngestLock.acquire(channel, LOCK_WAIT_MILLIS)) {
+        if (lock == null) {
+          json(exchange, 409, JSON.createObjectNode().put("error", "another ccrec process is writing; try again"));
+          return;
+        }
+        store.buildUsageIfMissing();
+        String hostId = launcher.path("hostId").isTextual() ? launcher.path("hostId").asText() : null;
+        for (Map.Entry<String, RecordStore.Deleted> entry : store.deleteSessions(sessionIds, null, hostId).entrySet()) {
+          ObjectNode node = deleted.addObject();
+          node.put("sessionId", entry.getKey());
+          node.put("found", entry.getValue().anything());
+          node.put("records", entry.getValue().messages());
+          node.put("contents", entry.getValue().contents());
+          if (entry.getValue().anything()) {
+            // Named, as on the command line: the hooks are told to leave it alone from here on.
+            SpoolQueue.forget(home.resolve("spool"), entry.getKey(), true);
+          }
+        }
+      }
+    }
+    json(exchange, 200, answer);
   }
 
   // ---- the API --------------------------------------------------------------------------------

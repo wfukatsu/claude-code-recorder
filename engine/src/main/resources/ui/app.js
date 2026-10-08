@@ -5,6 +5,21 @@
 
 const TEXT = {
   ja: {
+    deleteSession: 'セッションを削除',
+    deleteSelected: (n) => `選択した ${n} 件を削除`,
+    selected: (n) => `${n} 件を選択中`,
+    clearSelection: '選択を解除',
+    selectSession: 'このセッションを選択',
+    confirmDelete: (n) => (n === 1 ? 'このセッションを削除しますか？' : `${n} 件のセッションを削除しますか？`),
+    deleteWarning: '記録、使用量、ほかのセッションが使っていない本文を削除します。元に戻せません。',
+    deleteNote: '削除したセッションは、フックからは以後記録されません。Claude Code のトランスクリプト（~/.claude/projects 配下）は消えません。',
+    andMore: (n) => `ほか ${n} 件`,
+    cancel: 'キャンセル',
+    doDelete: '削除する',
+    deleting: '削除中…',
+    deletedNotice: (n) => `${n} 件のセッションを削除しました。`,
+    deleteFailed: '削除できませんでした',
+    busy: 'ほかの ccrec の処理が書き込み中です。少し待ってからやり直してください。',
     labelCommand: 'コマンド',
     labelNotice: '通知',
     labelOutput: 'コマンド出力',
@@ -169,6 +184,21 @@ const TEXT = {
     },
   },
   en: {
+    deleteSession: 'Delete session',
+    deleteSelected: (n) => `Delete the ${n} selected`,
+    selected: (n) => `${n} selected`,
+    clearSelection: 'Clear selection',
+    selectSession: 'Select this session',
+    confirmDelete: (n) => (n === 1 ? 'Delete this session?' : `Delete ${n} sessions?`),
+    deleteWarning: 'Its records, its usage and every content no other session uses are deleted. This cannot be undone.',
+    deleteNote: 'The hooks will not record a deleted session again. Claude Code\'s own transcripts (under ~/.claude/projects) are left alone.',
+    andMore: (n) => `and ${n} more`,
+    cancel: 'Cancel',
+    doDelete: 'Delete',
+    deleting: 'Deleting…',
+    deletedNotice: (n) => (n === 1 ? '1 session was deleted.' : `${n} sessions were deleted.`),
+    deleteFailed: 'Could not delete',
+    busy: 'Another ccrec process is writing. Wait a moment and try again.',
     labelCommand: 'Command',
     labelNotice: 'Notice',
     labelOutput: 'Command output',
@@ -403,6 +433,75 @@ async function api(path) {
   return response.json();
 }
 
+/** The one request that changes anything: marked as this page's own, which no form elsewhere can do. */
+async function deleteSessions(sessionIds) {
+  const response = await fetch('/api/sessions/delete', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'X-Ccrec-Ui': '1' },
+    body: JSON.stringify({ sessionIds }),
+  });
+  if (!response.ok) {
+    const error = new Error(`${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return response.json();
+}
+
+/**
+ * Asks before deleting, in the page rather than in a browser prompt, with the way out in focus.
+ * `sessions` are `{ sessionId, title }`; `done` runs once they are gone.
+ */
+function confirmDeletion(sessions, done) {
+  const failure = el('p', { class: 'error', hidden: true });
+  // Closed and taken off the page at once: a dialog left behind would be found again by the next one.
+  const dismiss = () => {
+    if (dialog.open) dialog.close();
+    dialog.remove();
+  };
+  const cancel = el('button', { type: 'button', onclick: dismiss }, t('cancel'));
+  const confirm = el('button', { type: 'button', class: 'danger' }, t('doDelete'));
+  const listed = sessions.slice(0, 5);
+  const dialog = el(
+    'dialog',
+    { class: 'confirm' },
+    el('h2', {}, t('confirmDelete', sessions.length)),
+    el(
+      'ul',
+      {},
+      listed.map((s) => el('li', {}, s.title || t('untitled'))),
+      sessions.length > listed.length ? el('li', { class: 'more-items' }, t('andMore', sessions.length - listed.length)) : null,
+    ),
+    el('p', {}, t('deleteWarning')),
+    el('p', { class: 'note' }, t('deleteNote')),
+    failure,
+    el('div', { class: 'actions' }, cancel, confirm),
+  );
+  confirm.onclick = async () => {
+    confirm.disabled = cancel.disabled = true;
+    confirm.textContent = t('deleting');
+    try {
+      const answer = await deleteSessions(sessions.map((s) => s.sessionId));
+      dismiss();
+      done(answer.deleted.filter((d) => d.found).length);
+    } catch (error) {
+      failure.hidden = false;
+      failure.textContent = error.status === 409 ? t('busy') : `${t('deleteFailed')}: ${error.message}`;
+      confirm.disabled = cancel.disabled = false;
+      confirm.textContent = t('doDelete');
+    }
+  };
+  // Escape closes it without going through a button.
+  dialog.addEventListener('cancel', dismiss);
+  dialog.addEventListener('close', dismiss);
+  // One question at a time, whatever became of the last one.
+  for (const earlier of document.querySelectorAll('dialog.confirm')) earlier.remove();
+  document.body.append(dialog);
+  dialog.showModal();
+  cancel.focus();
+}
+
 const compact = (n) =>
   n === null || n === undefined ? '–' : new Intl.NumberFormat(state.lang, { notation: 'compact', maximumFractionDigits: 1 }).format(n);
 const whole = (n) => (n === null || n === undefined ? '–' : new Intl.NumberFormat(state.lang).format(n));
@@ -498,6 +597,8 @@ async function draw() {
 // ---- the list of sessions --------------------------------------------------------------------
 
 const listFilters = { days: remembered('days', '30'), project: '', title: '' };
+// What the list says once, after a deletion took the reader back to it.
+let notice = null;
 
 async function drawSessions(view, turn) {
   if (state.accounts.length === 0) {
@@ -512,6 +613,42 @@ async function drawSessions(view, turn) {
   if (!projects.includes(listFilters.project)) listFilters.project = '';
   const table = el('div');
   const stats = el('div', { class: 'stats' });
+  const selection = new Set();
+  const bar = el('div', { class: 'selection', hidden: true });
+  const showSelection = () => {
+    bar.hidden = selection.size === 0;
+    bar.replaceChildren(
+      el('span', {}, t('selected', selection.size)),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'danger',
+          onclick: () =>
+            confirmDeletion(
+              sessions.filter((s) => selection.has(s.sessionId)),
+              (count) => {
+                notice = t('deletedNotice', count);
+                draw();
+              },
+            ),
+        },
+        t('deleteSelected', selection.size),
+      ),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'quiet',
+          onclick: () => {
+            selection.clear();
+            fill();
+          },
+        },
+        t('clearSelection'),
+      ),
+    );
+  };
 
   const fill = () => {
     const since = listFilters.days === 'all' ? 0 : Date.now() - Number(listFilters.days) * 86400000;
@@ -522,6 +659,9 @@ async function drawSessions(view, turn) {
         (!listFilters.project || s.projectPath === listFilters.project) &&
         (!needle || `${s.title ?? ''} ${s.projectPath ?? ''}`.toLowerCase().includes(needle)),
     );
+    // What a filter hides is not deleted along with what it shows.
+    for (const id of [...selection]) if (!shown.some((s) => s.sessionId === id)) selection.delete(id);
+    showSelection();
     const sum = (pick) => shown.reduce((total, s) => total + (pick(s) ?? 0), 0);
     const costs = shown.filter((s) => s.costUsd !== null);
     stats.replaceChildren(
@@ -548,6 +688,7 @@ async function drawSessions(view, turn) {
             el(
               'tr',
               {},
+              el('th', {}),
               el('th', {}, t('lastActive')),
               el('th', {}, t('titleProject')),
               el('th', {}, t('model')),
@@ -563,6 +704,20 @@ async function drawSessions(view, turn) {
               el(
                 'tr',
                 { class: 'link' },
+                el(
+                  'td',
+                  { class: 'pick' },
+                  el('input', {
+                    type: 'checkbox',
+                    'aria-label': t('selectSession'),
+                    checked: selection.has(s.sessionId),
+                    onchange: (event) => {
+                      if (event.target.checked) selection.add(s.sessionId);
+                      else selection.delete(s.sessionId);
+                      showSelection();
+                    },
+                  }),
+                ),
                 el('td', { class: 'when' }, when(s.endedAt ?? s.startedAt)),
                 el(
                   'td',
@@ -614,17 +769,23 @@ async function drawSessions(view, turn) {
       fill();
     },
   });
+  // replaceChildren would write a missing notice out as the word "null".
   view.replaceChildren(
-    el(
-      'div',
-      { class: 'filters' },
-      el('label', { class: 'control' }, `${t('period')} `, period),
-      el('label', { class: 'control' }, `${t('project')} `, project),
-      title,
-    ),
-    stats,
-    table,
+    ...[
+      el(
+        'div',
+        { class: 'filters' },
+        el('label', { class: 'control' }, `${t('period')} `, period),
+        el('label', { class: 'control' }, `${t('project')} `, project),
+        title,
+      ),
+      notice ? el('p', { class: 'notice', role: 'status' }, notice) : null,
+      stats,
+      bar,
+      table,
+    ].filter(Boolean),
   );
+  notice = null;
   fill();
 }
 
@@ -684,7 +845,24 @@ async function drawSession(view, sessionId, turn) {
   };
 
   view.replaceChildren(
-    el('a', { class: 'back', href: '#/sessions' }, t('back')),
+    el(
+      'div',
+      { class: 'headline' },
+      el('a', { class: 'back', href: '#/sessions' }, t('back')),
+      el(
+        'button',
+        {
+          type: 'button',
+          class: 'danger quiet',
+          onclick: () =>
+            confirmDeletion([{ sessionId, title: summary.title }], () => {
+              notice = t('deletedNotice', 1);
+              location.hash = '#/sessions';
+            }),
+        },
+        t('deleteSession'),
+      ),
+    ),
     el('h1', {}, summary.title || t('untitled')),
     el(
       'div',

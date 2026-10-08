@@ -788,3 +788,92 @@ pre.code.bad {
   font-size: 13px;
   margin-bottom: 6px;
 }
+
+/* ---- deleting ----------------------------------------------------------------------------------- */
+
+.headline {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+button.danger {
+  color: #fff;
+  background: var(--bad);
+  border-color: var(--bad);
+}
+
+button.danger.quiet {
+  color: var(--bad);
+  background: none;
+  border-color: var(--line);
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+td.pick {
+  width: 1%;
+  padding-right: 0;
+}
+
+.selection {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: var(--accent-soft);
+  border-radius: 8px;
+}
+
+.notice {
+  margin: 0 0 14px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: var(--added);
+}
+
+dialog.confirm {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 20px 22px;
+  width: min(460px, calc(100vw - 32px));
+}
+
+dialog.confirm::backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+
+dialog.confirm h2 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: var(--text);
+}
+
+dialog.confirm ul {
+  margin: 0 0 12px;
+  padding-left: 1.3em;
+  overflow-wrap: anywhere;
+}
+
+dialog.confirm .more-items {
+  list-style: none;
+  color: var(--muted);
+}
+
+dialog.confirm p {
+  margin: 0 0 10px;
+}
+
+dialog.confirm .actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}

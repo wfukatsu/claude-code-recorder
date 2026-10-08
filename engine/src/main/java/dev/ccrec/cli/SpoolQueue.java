@@ -71,6 +71,23 @@ public final class SpoolQueue {
     return new Status(asked.size(), asked.isEmpty() ? null : asked.get(0), unreadable, entries);
   }
 
+  /**
+   * Takes a deleted session out of the queue and, when {@code always} or when the hooks still held
+   * it, leaves the mark that keeps them from recording it again.
+   */
+  public static void forget(Path spool, String sessionId, boolean always) throws IOException {
+    if (!sessionId.matches("[A-Za-z0-9_-]+")) {
+      return;
+    }
+    Files.createDirectories(spool);
+    boolean queued = Files.deleteIfExists(spool.resolve(sessionId + ".json"));
+    Files.deleteIfExists(spool.resolve(sessionId + ".done"));
+    Path ignored = spool.resolve(sessionId + ".ignored");
+    if ((always || queued) && !Files.exists(ignored)) {
+      Files.createFile(ignored);
+    }
+  }
+
   /** The mark that goes with a queue entry. */
   static Path done(Path entry) {
     String name = entry.getFileName().toString();

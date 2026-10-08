@@ -241,4 +241,53 @@ class UiServerTest {
       assertFalse(queue.path("entries").get(1).path("waiting").asBoolean());
     }
   }
+
+  private HttpResponse<String> post(UiServer server, String body, String... headers) throws Exception {
+    HttpRequest.Builder request =
+        HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + server.port() + "/api/sessions/delete"))
+            .header("Cookie", "ccrec_ui_" + server.port() + "=" + TOKEN)
+            .POST(HttpRequest.BodyPublishers.ofString(body));
+    for (int i = 0; i < headers.length; i += 2) {
+      request.header(headers[i], headers[i + 1]);
+    }
+    return client.send(request.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void aSessionIsDeletedOnlyByARequestThePageItselfCanMake(@TempDir Path dir) throws Exception {
+    Path home = Files.createDirectories(dir.resolve("home"));
+    Path spool = Files.createDirectories(home.resolve("spool"));
+    Files.writeString(spool.resolve(SESSION + ".json"), "{\"session_id\":\"" + SESSION + "\"}");
+    String body = "{\"sessionIds\":[\"" + SESSION + "\",\"never-recorded\"]}";
+    try (RecordStore store = store(dir);
+        UiServer server = new UiServer(store, "acct-alice", 0, TOKEN, home, null, JSON.createObjectNode())) {
+      server.start();
+      String json = "application/json";
+
+      // What a form on another site can send, token cookie and all, is refused.
+      assertEquals(403, post(server, body, "Content-Type", "text/plain").statusCode());
+      assertEquals(403, post(server, body, "Content-Type", json).statusCode(), "without the header of ours");
+      assertEquals(
+          403, post(server, body, "Content-Type", json, "X-Ccrec-Ui", "1", "Origin", "https://evil.example").statusCode());
+      assertEquals(400, post(server, "{\"sessionIds\":[]}", "Content-Type", json, "X-Ccrec-Ui", "1").statusCode());
+      assertEquals(400, post(server, "not json", "Content-Type", json, "X-Ccrec-Ui", "1").statusCode());
+      assertEquals(200, get(server, "/api/sessions/" + SESSION, true).statusCode(), "nothing was deleted so far");
+      assertEquals(401, get(server, "/api/sessions/delete", false).statusCode());
+
+      HttpResponse<String> done =
+          post(server, body, "Content-Type", json, "X-Ccrec-Ui", "1", "Origin", "http://127.0.0.1:" + server.port());
+      assertEquals(200, done.statusCode(), done.body());
+      JsonNode deleted = JSON.readTree(done.body()).path("deleted");
+      assertTrue(deleted.get(0).path("found").asBoolean());
+      assertEquals(4, deleted.get(0).path("records").asInt());
+      assertFalse(deleted.get(1).path("found").asBoolean());
+
+      assertEquals(404, get(server, "/api/sessions/" + SESSION, true).statusCode());
+      assertEquals(0, json(server, "/api/sessions").size());
+      assertEquals(1, json(server, "/api/sessions?account=acct-bob").size(), "another account's session is untouched");
+      assertFalse(Files.exists(spool.resolve(SESSION + ".json")));
+      assertTrue(Files.exists(spool.resolve(SESSION + ".ignored")), "the hooks are told to leave it alone");
+      assertFalse(Files.exists(spool.resolve("never-recorded.ignored")));
+    }
+  }
 }

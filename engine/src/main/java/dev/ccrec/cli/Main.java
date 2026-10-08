@@ -27,7 +27,6 @@ import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -360,7 +359,7 @@ public final class Main {
               continue;
             }
             // Named, it may be resumed some day; picked by its age, only if the hooks still hold it.
-            forgetInQueue(sessionId, cutoff == null);
+            SpoolQueue.forget(home.resolve("spool"), sessionId, cutoff == null);
             records += deleted.messages();
             contents += deleted.contents();
             out.printf(
@@ -374,19 +373,6 @@ public final class Main {
       }
     }
     return missing == 0 ? 0 : 1;
-  }
-
-  private void forgetInQueue(String sessionId, boolean always) throws IOException {
-    if (!sessionId.matches("[A-Za-z0-9_-]+")) {
-      return;
-    }
-    Path spool = Files.createDirectories(home.resolve("spool"));
-    boolean queued = Files.deleteIfExists(spool.resolve(sessionId + ".json"));
-    Files.deleteIfExists(spool.resolve(sessionId + ".done"));
-    Path ignored = spool.resolve(sessionId + ".ignored");
-    if ((always || queued) && !Files.exists(ignored)) {
-      Files.createFile(ignored);
-    }
   }
 
   /** The time --before (a date, or an instant) or --older-than (days) names; null when neither is given. */
@@ -728,7 +714,12 @@ public final class Main {
       UiServer server;
       // What only the launcher can tell: its version, and whether the hooks are installed.
       String launcher = System.getenv("CCREC_UI_INFO");
-      JsonNode info = launcher == null || launcher.isBlank() ? JSON.createObjectNode() : JSON.readTree(launcher);
+      ObjectNode info =
+          launcher == null || launcher.isBlank() ? JSON.createObjectNode() : (ObjectNode) JSON.readTree(launcher);
+      if (System.getenv("CCREC_IDENTITY_JSON") != null) {
+        // Where this machine's ingest positions are, for deleting a session that has no row to say.
+        info.put("hostId", text(identity(), "host_id"));
+      }
       try {
         server = new UiServer(store, accountId, port, token, home, config, info);
       } catch (java.net.BindException e) {
@@ -805,26 +796,11 @@ public final class Main {
   }
 
   private FileChannel openLock() throws IOException {
-    Files.createDirectories(home);
-    return FileChannel.open(
-        home.resolve("ingest.lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
+    return IngestLock.open(home);
   }
 
-  /** SQLite takes one writer, so writers queue here rather than colliding inside the database. */
   private static FileLock acquire(FileChannel channel) throws IOException {
-    long deadline = System.currentTimeMillis() + LOCK_WAIT_MILLIS;
-    while (true) {
-      FileLock lock = channel.tryLock();
-      if (lock != null || System.currentTimeMillis() >= deadline) {
-        return lock;
-      }
-      try {
-        Thread.sleep(250);
-      } catch (InterruptedException e) {
-        Thread.currentThread().interrupt();
-        return null;
-      }
-    }
+    return IngestLock.acquire(channel, LOCK_WAIT_MILLIS);
   }
 
   static final class UsageException extends RuntimeException {
