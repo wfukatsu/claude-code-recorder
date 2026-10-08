@@ -368,7 +368,8 @@ public final class Main {
           }
         }
         if (cutoff != null) {
-          out.printf("deleted %d sessions  records=%d  contents=%d%n", sessionIds.size() - missing, records, contents);
+          int gone = sessionIds.size() - missing;
+          out.printf("deleted %d session%s  records=%d  contents=%d%n", gone, gone == 1 ? "" : "s", records, contents);
         }
       }
     }
