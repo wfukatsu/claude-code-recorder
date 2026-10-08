@@ -23,8 +23,10 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Reads a session's transcript files incrementally into a {@link RecordStore}.
@@ -38,6 +40,8 @@ public final class Ingester {
   private static final int BATCH_LINES = 50;
   private static final int BATCH_CHARS = 1_000_000;
   private static final int PREVIEW_CHARS = 1000;
+  /** Past this many characters of URLs, a further pull request is recorded each time it is linked. */
+  private static final int PR_URLS_CHARS = 3000;
 
   private final RecordStore store;
   private final Redactor redactor;
@@ -167,11 +171,18 @@ public final class Ingester {
     String absolute = file.toAbsolutePath().normalize().toString();
     String pathHash = ContentCodec.hash(absolute);
     IngestState state =
-        store.ingestState(hostId, pathHash).orElse(new IngestState(hostId, pathHash, absolute, 0, 0, null));
+        store.ingestState(hostId, pathHash).orElse(new IngestState(hostId, pathHash, absolute, 0, 0, null, null));
 
     long position = state.offset();
     int lineNo = state.lineNo();
     String usageMessageId = state.usageMessageId();
+    Set<String> prUrls = new LinkedHashSet<>();
+    if (state.prUrls() != null) {
+      prUrls.addAll(List.of(state.prUrls().split("\n")));
+    }
+    // What a line with no record to put it on says about itself, for the next line of its API message.
+    String carried = null;
+    String carriedMessageId = null;
 
     List<MessageRecord> batch = new ArrayList<>();
     Map<String, String> contents = new LinkedHashMap<>();
@@ -186,6 +197,7 @@ public final class Ingester {
         position = 0;
         lineNo = 0;
         usageMessageId = null;
+        prUrls.clear();
       }
       // Read as a stream, a batch at a time: a first import can be a transcript of any size, and only
       // the line being read and the batch being built are held in memory.
@@ -215,12 +227,26 @@ public final class Ingester {
           TranscriptParser.Usage usage =
               line.messageId() != null && line.messageId().equals(usageMessageId) ? null : line.usage();
           // What the line says about itself goes, like the usage, on the first block kept for it.
-          String attributes = line.attributes() == null ? null : redactor.redact(line.attributes());
+          String attributes = line.attributes();
+          // Other records may be written between two lines of one message; another message ends it.
+          if (carried != null && line.messageId() != null) {
+            if (carriedMessageId.equals(line.messageId())) {
+              attributes = TranscriptParser.merge(carried, attributes);
+            }
+            carried = null;
+          }
+          attributes = attributes == null ? null : redactor.redact(attributes);
           int blockNo = 0;
           for (TranscriptParser.Block block : line.blocks()) {
             int thisBlock = blockNo++;
             if (!recordThinking && block.kind().equals(TranscriptParser.THINKING)) {
               continue;
+            }
+            if (block.kind().equals(TranscriptParser.PR_LINK)) {
+              if (prUrls.contains(block.text())) {
+                continue;
+              }
+              remember(prUrls, block.text());
             }
             String text = redactor.redact(block.text());
             String hash = ContentCodec.hash(text);
@@ -264,12 +290,18 @@ public final class Ingester {
                     recorded == null ? null : recorded.webFetches(),
                     said));
           }
+          // A thinking block whose text is withheld leaves no record, yet its line is the one that
+          // says how long the thinking took: the next line of the same message says it instead.
+          if (attributes != null && line.messageId() != null) {
+            carried = attributes;
+            carriedMessageId = line.messageId();
+          }
         }
         if (batchLines >= BATCH_LINES || batchChars >= BATCH_CHARS) {
           store.writeBatch(
               batch,
               contents,
-              new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId),
+              new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId, joined(prUrls)),
               meta == null ? null : meta.record(sessionId, account));
           totalMessages += batch.size();
           batch = new ArrayList<>();
@@ -285,11 +317,21 @@ public final class Ingester {
       store.writeBatch(
           batch,
           contents,
-          new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId),
+          new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId, joined(prUrls)),
           meta == null ? null : meta.record(sessionId, account));
       totalMessages += batch.size();
     }
     return new FileResult(totalLines, totalMessages);
+  }
+
+  private static void remember(Set<String> prUrls, String url) {
+    if (!url.contains("\n") && (prUrls.isEmpty() ? 0 : joined(prUrls).length()) + url.length() < PR_URLS_CHARS) {
+      prUrls.add(url);
+    }
+  }
+
+  private static String joined(Set<String> prUrls) {
+    return prUrls.isEmpty() ? null : String.join("\n", prUrls);
   }
 
   private Long firstTimestamp(Path transcript) {

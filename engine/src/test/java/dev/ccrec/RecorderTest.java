@@ -302,7 +302,7 @@ class RecorderTest {
         store.writeBatch(
             List.of(record),
             java.util.Map.of(ContentCodec.hash("hello"), "hello"),
-            new dev.ccrec.model.IngestState("host-1", "hash-" + line, "/x/" + SESSION + ".jsonl", 1, line, null),
+            new dev.ccrec.model.IngestState("host-1", "hash-" + line, "/x/" + SESSION + ".jsonl", 1, line, null, null),
             new SessionRecord(
                 account, 1_000L, SESSION, "org-1", "host-1", null, null, null, null, null, null, null, null, null,
                 null, null, null));
@@ -448,6 +448,60 @@ class RecorderTest {
       ingester(store, true).ingestSession(transcript, SESSION, ALICE);
       assertEquals(1.25, store.session(SESSION, "acct-alice").orElseThrow().costUsd());
       assertEquals("cli", store.session(SESSION, null).orElseThrow().entrypoint());
+    }
+  }
+
+  @Test
+  void whatARecordlessLineSaysIsKeptOnTheNextLineOfItsMessage(@TempDir Path dir) throws IOException {
+    // The thinking text is withheld, so the line leaves no record — and it is the one with the duration.
+    String thought =
+        "{\"type\":\"assistant\",\"thinkingDurationMs\":7000,\"message\":{\"id\":\"msg_1\",\"stop_reason\":null,"
+            + "\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"c2ln\"}]}}";
+    String hook = "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_success\"}}";
+    String said =
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_1\",\"stop_reason\":\"end_turn\","
+            + "\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}";
+    String next =
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_2\",\"stop_reason\":\"end_turn\","
+            + "\"content\":[{\"type\":\"text\",\"text\":\"more\"}]}}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    // The message thinks twice before it speaks; a hook's record comes in between.
+    Files.writeString(
+        transcript,
+        String.join("\n", PROMPT, thought, thought.replace("7000", "500"), hook, said, thought.replace("msg_1", "msg_9"), next)
+            + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      List<MessageRecord> texts =
+          store.messages(SESSION).stream().filter(m -> m.kind().equals(TranscriptParser.ASSISTANT_TEXT)).toList();
+      assertTrue(texts.get(0).attributes().contains("\"thinking_ms\":7500"), texts.get(0).attributes());
+      assertTrue(texts.get(0).attributes().contains("\"stop_reason\":\"end_turn\""));
+      assertFalse(texts.get(1).attributes().contains("thinking_ms"), "not on a line of another message");
+    }
+  }
+
+  @Test
+  void aPullRequestLinkedAgainAndAgainIsRecordedOnce(@TempDir Path dir) throws IOException {
+    String link = "{\"type\":\"pr-link\",\"prNumber\":%d,\"prUrl\":\"https://github.com/org/repo/pull/%d\"}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, String.join("\n", PROMPT, String.format(link, 7, 7), String.format(link, 7, 7)) + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      // Linked once more by the time of the next run, along with another.
+      Files.writeString(
+          transcript,
+          String.join("\n", String.format(link, 7, 7), String.format(link, 8, 8), String.format(link, 7, 7)) + "\n",
+          StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+
+      assertEquals(
+          List.of("https://github.com/org/repo/pull/7", "https://github.com/org/repo/pull/8"),
+          store.messages(SESSION).stream()
+              .filter(m -> m.kind().equals(TranscriptParser.PR_LINK))
+              .map(MessageRecord::preview)
+              .toList());
     }
   }
 

@@ -189,6 +189,29 @@ public final class TranscriptParser {
         cost);
   }
 
+  /**
+   * Two lines' attributes as one object; where both say something, the later line's word stands —
+   * except for the time spent thinking, which is the two together.
+   */
+  public static String merge(String earlier, String later) {
+    if (earlier == null || later == null) {
+      return earlier != null ? earlier : later;
+    }
+    try {
+      ObjectNode merged = (ObjectNode) JSON.readTree(earlier);
+      ObjectNode last = (ObjectNode) JSON.readTree(later);
+      // A message can think more than once: the time adds up rather than being replaced.
+      long thinking = merged.path("thinking_ms").asLong(0) + last.path("thinking_ms").asLong(0);
+      merged.setAll(last);
+      if (thinking > 0) {
+        merged.put("thinking_ms", thinking);
+      }
+      return merged.toString();
+    } catch (JsonProcessingException | ClassCastException e) {
+      return later;
+    }
+  }
+
   /** Why and how the model answered, and what the answer is attributed to. */
   private static void assistantAttributes(JsonNode node, ObjectNode attributes) {
     JsonNode message = node.path("message");

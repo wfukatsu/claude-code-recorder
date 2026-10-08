@@ -7,8 +7,13 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import dev.ccrec.model.SessionRecord;
 import dev.ccrec.store.RecordStore;
 import dev.ccrec.store.ScalarDbRecordStore;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.PrintStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
@@ -176,5 +181,114 @@ class MainTest {
     Files.setLastModifiedTime(mark, FileTime.from(before.minus(Duration.ofHours(1))));
     Files.delete(dir.resolve("open.jsonl"));
     assertEquals(0, Main.run(new String[] {"ingest", "--session", "other", "--home", home.toString()}));
+  }
+
+  /** Runs a command and returns what it printed. */
+  private static String printed(int expectedExit, String... args) throws IOException {
+    PrintStream console = System.out;
+    ByteArrayOutputStream captured = new ByteArrayOutputStream();
+    System.setOut(new PrintStream(captured, true, StandardCharsets.UTF_8));
+    try {
+      assertEquals(expectedExit, Main.run(args));
+    } finally {
+      System.setOut(console);
+    }
+    return captured.toString(StandardCharsets.UTF_8);
+  }
+
+  private static String assistant(String messageId, String model, String stop, String block, String more) {
+    return "{\"type\":\"assistant\",\"timestamp\":\"2026-10-07T01:00:05.000Z\"" + more + ",\"message\":{\"id\":\"" + messageId
+        + "\",\"model\":\"" + model + "\",\"stop_reason\":\"" + stop + "\",\"usage\":{\"input_tokens\":1000,"
+        + "\"output_tokens\":200,\"output_tokens_details\":{\"thinking_tokens\":50},\"cache_read_input_tokens\":30,"
+        + "\"cache_creation_input_tokens\":40,\"server_tool_use\":{\"web_search_requests\":1,\"web_fetch_requests\":2}},"
+        + "\"content\":[" + block + "]}}";
+  }
+
+  /** A session with two models, a failed tool call, a turn, a pull request linked twice and a cost. */
+  private static Path busyTranscript(Path dir, String sessionId) throws IOException {
+    String result =
+        "{\"type\":\"user\",\"permissionMode\":\"acceptEdits\",\"message\":{\"role\":\"user\",\"content\":["
+            + "{\"type\":\"tool_result\",\"tool_use_id\":\"%s\",\"is_error\":%s,\"content\":\"out\"}]}}";
+    String pr = "{\"type\":\"pr-link\",\"prNumber\":7,\"prUrl\":\"https://github.com/org/repo/pull/7\"}";
+    Path transcript = dir.resolve(sessionId + ".jsonl");
+    Files.writeString(
+        transcript,
+        String.join(
+                "\n",
+                String.format(LINE, "/work/app").strip(),
+                assistant("msg_1", "claude-opus-5-5", "tool_use", "{\"type\":\"thinking\",\"thinking\":\"\"}", ",\"thinkingDurationMs\":3000"),
+                assistant("msg_1", "claude-opus-5-5", "tool_use", "{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{}}", ""),
+                String.format(result, "t1", "true"),
+                assistant("msg_2", "claude-opus-5-5", "tool_use", "{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"Bash\",\"input\":{}}", ""),
+                String.format(result, "t2", "false"),
+                assistant("msg_3", "claude-haiku-4-5", "end_turn", "{\"type\":\"text\",\"text\":\"done\"}", ""),
+                "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":65000}",
+                pr,
+                pr,
+                "{\"type\":\"cost-state\",\"totalCostUSD\":1.5,\"totalAPIDuration\":61000,\"totalLinesAdded\":12}")
+            + "\n");
+    return transcript;
+  }
+
+  @Test
+  void usageIsReportedPerSessionAndSummedPerAccount(@TempDir Path dir) throws IOException {
+    Path home = home(dir);
+    queue(home, "busy", busyTranscript(dir, "busy"), true, null);
+    queue(home, "busy-too", busyTranscript(dir, "busy-too"), true, null);
+    assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
+
+    String one = printed(0, "usage", "busy", "--home", home.toString());
+    assertTrue(one.lines().anyMatch(l -> l.matches("busy +claude-opus-5-5 +2 +2,000 +400 +100 +60 +80 +6")), one);
+    assertTrue(one.lines().anyMatch(l -> l.matches("total +1 session +3 +3,000 +600 +150 +90 +120 +9")), one);
+
+    String all = printed(0, "usage", "--account", "acct-1", "--home", home.toString());
+    assertTrue(all.lines().anyMatch(l -> l.matches("acct-1 +claude-haiku-4-5 +2 +2,000 +400 +100 +60 +80 +6")), all);
+    assertTrue(all.lines().anyMatch(l -> l.matches("total +2 sessions +6 +6,000 .*")), all);
+
+    JsonNode json = new ObjectMapper().readTree(printed(0, "usage", "busy", "--json", "--home", home.toString()));
+    assertEquals(2, json.size());
+    assertEquals(100, json.get(1).path("thinkingTokens").asInt());
+
+    String wrong = "";
+    try {
+      Main.run(new String[] {"usage", "--limit", "many", "--account", "acct-1", "--home", home.toString()});
+    } catch (RuntimeException e) {
+      wrong = e.getMessage();
+    }
+    assertEquals("--limit needs a number, not \"many\"", wrong);
+  }
+
+  @Test
+  void aSummaryAddsUpWhatTheSessionsRecordsSay(@TempDir Path dir) throws IOException {
+    Path home = home(dir);
+    queue(home, "busy", busyTranscript(dir, "busy"), true, null);
+    assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
+
+    JsonNode summary =
+        new ObjectMapper().readTree(printed(0, "summary", "busy", "--json", "--account", "acct-1", "--home", home.toString()));
+    assertEquals("acct-1", summary.path("account_id").asText());
+    assertEquals(1.5, summary.path("cost_usd").asDouble());
+    assertEquals(61000, summary.path("api_duration_ms").asLong());
+    assertEquals(12, summary.path("lines_added").asLong());
+    assertEquals(1, summary.path("prompts").asInt());
+    assertEquals(1, summary.path("turns").asInt());
+    assertEquals(65000, summary.path("turn_duration_ms").asLong());
+    assertEquals(3000, summary.path("thinking_duration_ms").asLong(), "said by a line that left no record");
+    assertEquals(2, summary.path("stop_reasons").path("tool_use").asInt(), "per API message, not per record");
+    assertEquals(1, summary.path("stop_reasons").path("end_turn").asInt());
+    assertEquals("acceptEdits", summary.path("permission_modes").get(0).asText());
+    assertEquals(1, summary.path("pull_requests").size());
+    assertEquals("Bash", summary.path("tools").get(0).path("tool").asText());
+    assertEquals(2, summary.path("tools").get(0).path("calls").asInt());
+    assertEquals(1, summary.path("tools").get(0).path("errors").asInt());
+    assertEquals(2, summary.path("usage").size());
+
+    String text = printed(0, "summary", "busy", "--account", "acct-1", "--home", home.toString());
+    assertTrue(text.contains("cost usd              $1.50"), text);
+    assertTrue(text.lines().anyMatch(l -> l.matches("turn duration +1m05s")), text);
+    assertTrue(text.lines().anyMatch(l -> l.matches("stop reasons +end_turn 1, tool_use 2")), text);
+    assertTrue(text.lines().anyMatch(l -> l.matches("Bash +2 +1")), text);
+
+    assertTrue(printed(1, "summary", "nope", "--account", "acct-1", "--home", home.toString()).contains("not recorded"));
   }
 }

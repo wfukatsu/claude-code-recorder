@@ -88,7 +88,7 @@ public final class ScalarDbRecordStore implements RecordStore {
               "web_fetch_requests", DataType.BIGINT,
               "attributes", DataType.TEXT),
           INGEST_STATE,
-          Map.of("usage_message_id", DataType.TEXT),
+          Map.of("usage_message_id", DataType.TEXT, "pr_urls", DataType.TEXT),
           SESSIONS,
           Map.of(
               "entrypoint", DataType.TEXT,
@@ -233,6 +233,7 @@ public final class ScalarDbRecordStore implements RecordStore {
               .addColumn("byte_offset", DataType.BIGINT)
               .addColumn("line_no", DataType.INT)
               .addColumn("usage_message_id", DataType.TEXT)
+              .addColumn("pr_urls", DataType.TEXT)
               .addPartitionKey("host_id")
               .addClusteringKey("source_path_hash", Scan.Ordering.Order.ASC)
               .build(),
@@ -374,6 +375,7 @@ public final class ScalarDbRecordStore implements RecordStore {
                   .bigIntValue("byte_offset", state.offset())
                   .intValue("line_no", state.lineNo())
                   .textValue("usage_message_id", state.usageMessageId())
+                  .textValue("pr_urls", state.prUrls())
                   .build());
         });
   }
@@ -638,7 +640,8 @@ public final class ScalarDbRecordStore implements RecordStore {
                             r.getText("source_path"),
                             r.getBigInt("byte_offset"),
                             r.getInt("line_no"),
-                            r.getText("usage_message_id"))));
+                            r.getText("usage_message_id"),
+                            r.getText("pr_urls"))));
   }
 
   @Override
