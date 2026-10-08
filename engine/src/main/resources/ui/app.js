@@ -5,6 +5,16 @@
 
 const TEXT = {
   ja: {
+    labelCommand: 'コマンド',
+    labelNotice: '通知',
+    labelOutput: 'コマンド出力',
+    labelInserted: '挿入',
+    labelSummary: '圧縮後の要約',
+    labelReminder: 'システムリマインダー',
+    showAll: 'すべて表示',
+    showLess: '折りたたむ',
+    asRecorded: '原文',
+    formatted: '整形',
     sessions: 'セッション',
     usageNav: '使用量',
     statusNav: '状態',
@@ -159,6 +169,16 @@ const TEXT = {
     },
   },
   en: {
+    labelCommand: 'Command',
+    labelNotice: 'Notice',
+    labelOutput: 'Command output',
+    labelInserted: 'Inserted',
+    labelSummary: 'Summary after compaction',
+    labelReminder: 'System reminder',
+    showAll: 'Show all',
+    showLess: 'Show less',
+    asRecorded: 'As recorded',
+    formatted: 'Formatted',
     sessions: 'Sessions',
     usageNav: 'Usage',
     statusNav: 'Status',
@@ -873,13 +893,64 @@ function conversation(panel, sessionId, summary) {
   load(true).catch(showFailure);
 }
 
+const PROSE = new Set(['user_prompt', 'assistant_text']);
+
+// Rows of prose are open from the start; each fetches the rest of its text when it comes into view.
+const comingIntoView = new IntersectionObserver(
+  (entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      comingIntoView.unobserve(entry.target);
+      entry.target.dispatchEvent(new Event('inview'));
+    }
+  },
+  { rootMargin: '600px' },
+);
+
+/** What a tool call does, in a line: the command, the file, the address — not the JSON around it. */
+function toolLine(record) {
+  const pick = (input) => {
+    for (const name of ['description', 'command', 'file_path', 'url', 'query', 'pattern', 'prompt']) {
+      if (typeof input[name] === 'string' && input[name]) return input[name];
+    }
+    return null;
+  };
+  try {
+    const input = JSON.parse(record.text);
+    return (input && typeof input === 'object' && pick(input)) || record.text;
+  } catch {
+    // Cut short by the list: the first field is usually there all the same.
+    const field = /"(?:description|command|file_path|url|query|pattern)":"((?:\\.|[^"\\])*)/.exec(record.text);
+    if (!field) return record.text;
+    try {
+      return JSON.parse(`"${field[1]}"`);
+    } catch {
+      return field[1];
+    }
+  }
+}
+
 /** A record as a row that opens; a tool call also takes its result, when that arrives. */
 function recordRow(record) {
   const failed = record.kind === 'tool_result' && record.subtype === 'error';
-  const label = TEXT[state.lang].kinds[record.kind] ?? record.kind;
-  const firstLine = record.text.replace(/\s+/g, ' ').trim();
-  const prose = record.kind === 'user_prompt' || record.kind === 'assistant_text';
-  const kind = el('span', { class: 'kind' }, record.kind === 'tool_use' ? record.toolName || label : label);
+  const said = record.attributes ?? {};
+  const prose = PROSE.has(record.kind);
+  let label = TEXT[state.lang].kinds[record.kind] ?? record.kind;
+  let flavour = '';
+  let firstLine = record.text;
+  if (record.kind === 'user_prompt') {
+    // Not everything filed as a prompt was typed by somebody: Claude Code writes some itself.
+    const gist = Render.gist(record.text);
+    firstLine = gist.line;
+    if (said.compact_summary) [label, flavour] = [t('labelSummary'), 'injected'];
+    else if (gist.kind === 'command') [label, flavour] = [t('labelCommand'), 'command'];
+    else if (gist.kind === 'notice' || said.prompt_source === 'system') [label, flavour] = [t('labelNotice'), 'injected'];
+    else if (gist.kind === 'output') [label, flavour] = [t('labelOutput'), 'injected'];
+    else if (gist.kind === 'wrapped') [label, flavour] = [t('labelInserted'), 'injected'];
+  } else if (record.kind === 'tool_use') {
+    label = record.toolName || label;
+    firstLine = toolLine(record);
+  }
   const meta = el('span', { class: 'meta' });
   const setMeta = (...parts) => (meta.textContent = parts.filter(Boolean).join(' · '));
   setMeta(
@@ -890,13 +961,17 @@ function recordRow(record) {
   const body = el('div', { class: 'body' });
   const node = el(
     'details',
-    { class: `record ${record.kind}${failed ? ' failed' : ''}${record.agentId !== 'main' ? ' agent' : ''}` },
+    {
+      class: ['record', record.kind, flavour, failed ? 'failed' : '', record.agentId !== 'main' ? 'agent' : ''].filter(Boolean).join(' '),
+      // What was said is read, not opened one by one. A summary after a compaction is long, and nobody's words.
+      open: prose && !said.compact_summary,
+    },
     el(
       'summary',
       {},
       el('span', { class: 'time' }, when(record.ts, true)),
-      kind,
-      el('span', { class: 'line' }, firstLine),
+      el('span', { class: 'kind' }, label),
+      el('span', { class: 'line' }, firstLine.replace(/\s+/g, ' ').trim()),
       record.agentId !== 'main' ? el('span', { class: 'tag' }, record.agentId) : null,
       meta,
     ),
@@ -907,13 +982,19 @@ function recordRow(record) {
   const fill = () => {
     filled = true;
     // replaceChildren would write a missing part out as the word "null".
-    const children = parts.flatMap((part) => [part.title ? el('h4', {}, part.title) : null, textOf(part.record, prose)]);
+    const children = parts.flatMap((part) => [part.title ? el('h4', {}, part.title) : null, textOf(part.record)]);
     if (record.kind === 'tool_use' && parts.length === 1) children.push(el('h4', {}, t('noResult')));
     body.replaceChildren(...children.filter(Boolean));
   };
   node.addEventListener('toggle', () => {
     if (node.open && !filled) fill();
   });
+  if (node.open) {
+    node.addEventListener('inview', () => {
+      if (!filled) fill();
+    });
+    comingIntoView.observe(node);
+  }
   return {
     node,
     attach(result) {
@@ -926,25 +1007,75 @@ function recordRow(record) {
   };
 }
 
-/** The text of a record: what the list already has, then all of it once fetched. */
-function textOf(record, prose) {
-  const pre = el('pre', { class: prose ? 'prose' : '' }, pretty(record, record.text + (record.whole ? '' : ' …')));
-  if (!record.whole && record.contentHash) {
-    api(`content/${record.contentHash}`)
-      .then((content) => (pre.textContent = pretty(record, content.text)))
-      .catch((error) => (pre.textContent = `${record.text} …\n\n[${t('loadFailed')}: ${error.message}]`));
+/** Recorded text laid out for reading, by what kind of thing it is. */
+function laidOut(record, text, complete) {
+  const labels = { command: t('labelCommand'), notice: t('labelNotice'), reminder: t('labelReminder') };
+  if (record.kind === 'user_prompt') return Render.prompt(text, labels);
+  if (record.kind === 'assistant_text' || record.kind === 'thinking') return Render.markdown(text);
+  // JSON cut short is not JSON: it waits, as it is, for the rest.
+  if (record.kind === 'tool_use' && complete) return Render.toolInput(record.toolName, text);
+  if (record.kind === 'mcp_meta' && complete) {
+    try {
+      return Render.json(JSON.parse(text));
+    } catch {
+      // Left as it is.
+    }
   }
-  return pre;
+  return el('pre', { class: record.kind === 'tool_result' && record.subtype === 'error' ? 'code bad' : 'code' }, text);
 }
 
-/** A tool's input is JSON on one line; it reads better laid out. Anything else is left as it is. */
-function pretty(record, text) {
-  if (record.kind !== 'tool_use' && record.kind !== 'mcp_meta') return text;
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2);
-  } catch {
-    return text;
+/**
+ * The text of a record: what the list already has, then all of it once fetched. Long text is held
+ * to a screenful until asked for; prose can be switched to the characters as they were recorded.
+ */
+function textOf(record) {
+  const content = el('div', { class: 'content' });
+  const holder = el('div', { class: 'clamp' }, content);
+  const tools = el('div', { class: 'text-tools' });
+  let text = record.text + (record.whole ? '' : ' …');
+  let complete = record.whole;
+  let raw = false;
+  const expand = el('button', {
+    type: 'button',
+    class: 'quiet small',
+    onclick: () => {
+      holder.classList.toggle('open');
+      expand.textContent = holder.classList.contains('open') ? t('showLess') : t('showAll');
+    },
+  });
+  const asRecorded = PROSE.has(record.kind)
+    ? el('button', {
+        type: 'button',
+        class: 'quiet small',
+        onclick: () => {
+          raw = !raw;
+          show();
+        },
+      })
+    : null;
+  const show = () => {
+    content.replaceChildren(raw ? el('pre', { class: 'code' }, text) : laidOut(record, text, complete));
+    if (asRecorded) asRecorded.textContent = raw ? t('formatted') : t('asRecorded');
+    // Measured once it is on the page: only text taller than the clamp gets the button.
+    requestAnimationFrame(() => {
+      const tall = holder.classList.contains('open') || content.scrollHeight > holder.clientHeight + 4;
+      expand.hidden = !tall;
+      expand.textContent = holder.classList.contains('open') ? t('showLess') : t('showAll');
+      holder.classList.toggle('short', !tall);
+    });
+  };
+  tools.append(expand, ...(asRecorded ? [asRecorded] : []));
+  show();
+  if (!record.whole && record.contentHash) {
+    api(`content/${record.contentHash}`)
+      .then((fetched) => {
+        text = fetched.text;
+        complete = true;
+        show();
+      })
+      .catch((error) => content.append(el('p', { class: 'error' }, `${t('loadFailed')}: ${error.message}`)));
   }
+  return el('div', { class: 'text' }, holder, tools);
 }
 
 // ---- usage over time ---------------------------------------------------------------------------

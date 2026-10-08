@@ -110,6 +110,7 @@ class UiServerTest {
       assertTrue(page.headers().firstValue("Content-Security-Policy").orElse("").contains("default-src 'self'"));
       assertEquals("nosniff", page.headers().firstValue("X-Content-Type-Options").orElseThrow());
       assertEquals(200, get(server, "/app.css", true).statusCode());
+      assertEquals(200, get(server, "/render.js", true).statusCode());
       assertEquals(404, get(server, "/app.js.map", true).statusCode());
       assertEquals(404, get(server, "/api/nothing", true).statusCode());
 
