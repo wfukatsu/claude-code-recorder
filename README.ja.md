@@ -117,4 +117,6 @@ npm pack        # 配布パッケージ（.tgz）を作る
 
 ## ライセンス
 
+Copyright 2026 Wataru Fukatsu (Scalar, Inc.)
+
 [Apache License 2.0](LICENSE) です。配布パッケージに同梱している第三者のライブラリは、それぞれのライセンスに従います。一覧は [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) にあります。
