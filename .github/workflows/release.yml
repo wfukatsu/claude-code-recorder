@@ -1,0 +1,35 @@
+name: release
+
+# Pushing a tag v<version> builds the package and attaches it to a GitHub release:
+#   npm version <patch|minor|major> && git push --follow-tags
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: The tag is the version in package.json
+        run: test "v$(node -p "require('./package.json').version")" = "$GITHUB_REF_NAME"
+      - run: npm run build
+      - run: npm test
+      # The tarball carries the built engine: installing it needs Node and a Java runtime, no JDK.
+      - run: npm pack
+      - name: Publish the tarball as a release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" claude-code-recorder-*.tgz --title "$GITHUB_REF_NAME" --generate-notes
