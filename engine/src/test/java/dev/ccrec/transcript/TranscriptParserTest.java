@@ -61,4 +61,22 @@ class TranscriptParserTest {
     assertTrue(parser.parse("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"\"}}").blocks().isEmpty());
     assertTrue(parser.parse("{\"type\":\"mode\",\"mode\":\"default\"}").blocks().isEmpty());
   }
+
+  @Test
+  void anAttributeIsAShortFactOrAbsent() {
+    TranscriptParser.Line plain = parser.parse("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}");
+    assertEquals(null, plain.attributes(), "a line that says nothing about itself has none");
+
+    String path = "/x".repeat(400);
+    TranscriptParser.Line line =
+        parser.parse(
+            "{\"type\":\"user\",\"toolDenialKind\":\"permission-rule\",\"interruptedMessageId\":\"m1\","
+                + "\"permissionMode\":null,\"toolUseResult\":{\"filePath\":\"" + path + "\",\"status\":{\"nested\":1},"
+                + "\"interrupted\":false},\"message\":{\"role\":\"user\",\"content\":\"hi\"}}");
+    assertTrue(line.attributes().contains("\"tool_denial\":\"permission-rule\""));
+    assertTrue(line.attributes().contains("\"interrupted\":true"));
+    assertTrue(!line.attributes().contains("permission_mode") && !line.attributes().contains("status"));
+    assertTrue(!line.attributes().contains("tool_interrupted"));
+    assertTrue(line.attributes().length() < 400, "a long value is cut");
+  }
 }

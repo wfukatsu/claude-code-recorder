@@ -30,6 +30,12 @@ Reading
   ccrec whoami                   the account recordings are filed under
   ccrec sessions [--limit n] [--account <id>] [--day yyyymmdd [--org <id>]] [--json]
   ccrec show <session-id> [--full] [--kind k1,k2] [--json]
+  ccrec summary <session-id> [--json]
+                                 one session at a glance: cost, durations, turns, stops, errors,
+                                 tools, permission modes, pull requests, usage
+  ccrec usage [<session-id>...] [--json]
+                                 tokens and API messages per model: of those sessions, or of
+                                 the sessions "ccrec sessions" lists with the same options
 
 Deleting
   ccrec delete <session-id>...   delete recorded sessions for good, with the contents no other
@@ -130,6 +136,8 @@ export async function main(args) {
     case 'sessions':
     case 'show':
     case 'delete':
+    case 'usage':
+    case 'summary':
       return runEngine(ensureHome(), [command, ...rest], resolveIdentity());
     default:
       console.error(`ccrec: unknown command "${command}"\n`);

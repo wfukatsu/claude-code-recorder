@@ -4,6 +4,7 @@ import dev.ccrec.model.Account;
 import dev.ccrec.model.IngestState;
 import dev.ccrec.model.MessageRecord;
 import dev.ccrec.model.SessionRecord;
+import dev.ccrec.model.UsageRecord;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -18,8 +19,9 @@ public interface RecordStore extends AutoCloseable {
 
   /**
    * Atomically writes messages, the content they reference, the ingest position and — so that no
-   * recorded line is ever left without one — the session they belong to. All keys are derived from
-   * the source, so repeating a batch is harmless.
+   * recorded line is ever left without one — the session they belong to, and adds the tokens the
+   * messages carry to their session's usage. All keys are derived from the source, so repeating a
+   * batch is harmless: a message written before adds only what has changed about it.
    *
    * @param contents text by content hash; content already stored is not rewritten
    * @param session the session row and its by-day index row to write along, or null for none
@@ -40,6 +42,13 @@ public interface RecordStore extends AutoCloseable {
   /** Newest first. */
   List<SessionRecord> sessions(String accountId, int limit);
 
+  /**
+   * One session's row, wherever it is filed.
+   *
+   * @param accountId where else to look for it, besides the account its records name; may be null
+   */
+  Optional<SessionRecord> session(String sessionId, String accountId);
+
   /** Sessions of an organization that started on a UTC day ({@code yyyyMMdd}), oldest first. */
   List<SessionRecord> sessionsByDay(String orgId, int day, int limit);
 
@@ -47,6 +56,17 @@ public interface RecordStore extends AutoCloseable {
   List<MessageRecord> messages(String sessionId);
 
   Optional<String> content(String contentHash);
+
+  /** What a session spent, one record per model, in model order. */
+  List<UsageRecord> usage(String sessionId);
+
+  /**
+   * Sums up the usage of the sessions recorded before usage was kept per session. Does nothing once
+   * it has run; a caller that writes runs it first.
+   *
+   * @return whether there was anything to do
+   */
+  boolean buildUsageIfMissing();
 
   /** What {@link #deleteSession} removed; {@code sharedContents} were kept for the sessions that still use them. */
   record Deleted(boolean session, int messages, int contents, int sharedContents) {
@@ -56,7 +76,7 @@ public interface RecordStore extends AutoCloseable {
   }
 
   /**
-   * Removes a session: its row and by-day index row, its records, how far its files were ingested,
+   * Removes a session: its row and by-day index row, its records and usage, how far its files were ingested,
    * and every content no other session refers to. Repeating it after an interruption finishes the job.
    *
    * @param accountId where else to look for the session row, besides the accounts its records name;

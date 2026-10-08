@@ -26,11 +26,13 @@ import dev.ccrec.model.Account;
 import dev.ccrec.model.IngestState;
 import dev.ccrec.model.MessageRecord;
 import dev.ccrec.model.SessionRecord;
+import dev.ccrec.model.UsageRecord;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -55,6 +57,46 @@ public final class ScalarDbRecordStore implements RecordStore {
   static final String MESSAGES = "messages";
   static final String CONTENTS = "contents";
   static final String INGEST_STATE = "ingest_state";
+  static final String SESSION_USAGE = "session_usage";
+
+  /** The row of {@code session_usage} that says the sessions recorded before it existed are in it. */
+  private static final String USAGE_BUILT = "_usage_built";
+
+  /** What a message used, in the order of {@link UsageRecord#counters()} after {@code messages}. */
+  private static final List<String> TOKEN_COLUMNS =
+      List.of(
+          "input_tokens",
+          "output_tokens",
+          "cache_read_tokens",
+          "cache_creation_tokens",
+          "thinking_tokens",
+          "cache_creation_5m_tokens",
+          "cache_creation_1h_tokens",
+          "web_search_requests",
+          "web_fetch_requests");
+
+  /** Columns introduced after 0.1.0, by table: creating a table leaves one that exists as it is. */
+  private static final Map<String, Map<String, DataType>> LATER_COLUMNS =
+      Map.of(
+          MESSAGES,
+          Map.of(
+              "message_id", DataType.TEXT,
+              "thinking_tokens", DataType.BIGINT,
+              "cache_creation_5m_tokens", DataType.BIGINT,
+              "cache_creation_1h_tokens", DataType.BIGINT,
+              "web_search_requests", DataType.BIGINT,
+              "web_fetch_requests", DataType.BIGINT,
+              "attributes", DataType.TEXT),
+          INGEST_STATE,
+          Map.of("usage_message_id", DataType.TEXT),
+          SESSIONS,
+          Map.of(
+              "entrypoint", DataType.TEXT,
+              "cost_usd", DataType.DOUBLE,
+              "api_duration_ms", DataType.BIGINT,
+              "tool_duration_ms", DataType.BIGINT,
+              "lines_added", DataType.BIGINT,
+              "lines_removed", DataType.BIGINT));
 
   private static final int MAX_ATTEMPTS = 4;
   private static final int DELETE_BATCH = 200;
@@ -103,6 +145,12 @@ public final class ScalarDbRecordStore implements RecordStore {
               .addColumn("model", DataType.TEXT)
               .addColumn("title", DataType.TEXT)
               .addColumn("ended_at", DataType.BIGINT)
+              .addColumn("entrypoint", DataType.TEXT)
+              .addColumn("cost_usd", DataType.DOUBLE)
+              .addColumn("api_duration_ms", DataType.BIGINT)
+              .addColumn("tool_duration_ms", DataType.BIGINT)
+              .addColumn("lines_added", DataType.BIGINT)
+              .addColumn("lines_removed", DataType.BIGINT)
               .addPartitionKey("account_id")
               .addClusteringKey("started_at", Scan.Ordering.Order.DESC)
               .addClusteringKey("session_id", Scan.Ordering.Order.ASC)
@@ -149,6 +197,12 @@ public final class ScalarDbRecordStore implements RecordStore {
               .addColumn("output_tokens", DataType.BIGINT)
               .addColumn("cache_read_tokens", DataType.BIGINT)
               .addColumn("cache_creation_tokens", DataType.BIGINT)
+              .addColumn("thinking_tokens", DataType.BIGINT)
+              .addColumn("cache_creation_5m_tokens", DataType.BIGINT)
+              .addColumn("cache_creation_1h_tokens", DataType.BIGINT)
+              .addColumn("web_search_requests", DataType.BIGINT)
+              .addColumn("web_fetch_requests", DataType.BIGINT)
+              .addColumn("attributes", DataType.TEXT)
               .addPartitionKey("session_id")
               .addClusteringKey("agent_id", Scan.Ordering.Order.ASC)
               .addClusteringKey("line_no", Scan.Ordering.Order.ASC)
@@ -183,20 +237,39 @@ public final class ScalarDbRecordStore implements RecordStore {
               .addClusteringKey("source_path_hash", Scan.Ordering.Order.ASC)
               .build(),
           true);
-      addColumnIfMissing(admin, MESSAGES, "message_id");
-      addColumnIfMissing(admin, INGEST_STATE, "usage_message_id");
+      admin.createTable(
+          NS,
+          SESSION_USAGE,
+          TableMetadata.newBuilder()
+              .addColumn("session_id", DataType.TEXT)
+              .addColumn("model", DataType.TEXT)
+              .addColumn("account_id", DataType.TEXT)
+              .addColumn("messages", DataType.BIGINT)
+              .addColumn("input_tokens", DataType.BIGINT)
+              .addColumn("output_tokens", DataType.BIGINT)
+              .addColumn("cache_read_tokens", DataType.BIGINT)
+              .addColumn("cache_creation_tokens", DataType.BIGINT)
+              .addColumn("thinking_tokens", DataType.BIGINT)
+              .addColumn("cache_creation_5m_tokens", DataType.BIGINT)
+              .addColumn("cache_creation_1h_tokens", DataType.BIGINT)
+              .addColumn("web_search_requests", DataType.BIGINT)
+              .addColumn("web_fetch_requests", DataType.BIGINT)
+              .addPartitionKey("session_id")
+              .addClusteringKey("model", Scan.Ordering.Order.ASC)
+              .build(),
+          true);
+      for (Map.Entry<String, Map<String, DataType>> table : LATER_COLUMNS.entrySet()) {
+        java.util.Set<String> present = admin.getTableMetadata(NS, table.getKey()).getColumnNames();
+        for (Map.Entry<String, DataType> column : new java.util.TreeMap<>(table.getValue()).entrySet()) {
+          if (!present.contains(column.getKey())) {
+            admin.addNewColumnToTable(NS, table.getKey(), column.getKey(), column.getValue());
+          }
+        }
+      }
     } catch (ExecutionException e) {
       throw new StoreException("could not create the ccrec schema", e);
     } finally {
       admin.close();
-    }
-  }
-
-  /** For a column introduced after 0.1.0: creating a table leaves one that exists as it is. */
-  private static void addColumnIfMissing(
-      DistributedTransactionAdmin admin, String table, String column) throws ExecutionException {
-    if (!admin.getTableMetadata(NS, table).getColumnNames().contains(column)) {
-      admin.addNewColumnToTable(NS, table, column, DataType.TEXT);
     }
   }
 
@@ -240,6 +313,14 @@ public final class ScalarDbRecordStore implements RecordStore {
     text(upsert, "model", session.model());
     text(upsert, "title", session.title());
     bigInt(upsert, "ended_at", session.endedAt());
+    text(upsert, "entrypoint", session.entrypoint());
+    if (session.costUsd() != null) {
+      upsert.doubleValue("cost_usd", session.costUsd());
+    }
+    bigInt(upsert, "api_duration_ms", session.apiDurationMs());
+    bigInt(upsert, "tool_duration_ms", session.toolDurationMs());
+    bigInt(upsert, "lines_added", session.linesAdded());
+    bigInt(upsert, "lines_removed", session.linesRemoved());
     tx.upsert(upsert.build());
 
     UpsertBuilder.Buildable byDay =
@@ -275,8 +356,13 @@ public final class ScalarDbRecordStore implements RecordStore {
           for (Map.Entry<String, String> content : contents.entrySet()) {
             putContentIfAbsent(tx, content.getKey(), content.getValue());
           }
+          Map<List<String>, long[]> spent = new LinkedHashMap<>();
           for (MessageRecord message : messages) {
+            countUsage(tx, message, spent);
             tx.upsert(messageUpsert(message));
+          }
+          for (Map.Entry<List<String>, long[]> entry : spent.entrySet()) {
+            addUsage(tx, entry.getKey().get(0), entry.getKey().get(1), entry.getKey().get(2), entry.getValue());
           }
           tx.upsert(
               Upsert.newBuilder()
@@ -290,6 +376,183 @@ public final class ScalarDbRecordStore implements RecordStore {
                   .textValue("usage_message_id", state.usageMessageId())
                   .build());
         });
+  }
+
+  /**
+   * Adds to {@code spent}, by (session, model, account), what this message adds to its session's
+   * usage: its tokens, less what the stored record of it — if it was written before — already counted.
+   */
+  private static void countUsage(DistributedTransaction tx, MessageRecord m, Map<List<String>, long[]> spent)
+      throws TransactionException {
+    Long[] used = used(m);
+    if (java.util.Arrays.stream(used).allMatch(java.util.Objects::isNull)) {
+      return;
+    }
+    List<String> columns = new ArrayList<>(TOKEN_COLUMNS);
+    columns.add("model");
+    Optional<Result> stored =
+        tx.get(
+            Get.newBuilder()
+                .namespace(NS)
+                .table(MESSAGES)
+                .partitionKey(Key.ofText("session_id", m.sessionId()))
+                .clusteringKey(
+                    Key.newBuilder()
+                        .addText("agent_id", m.agentId())
+                        .addInt("line_no", m.lineNo())
+                        .addInt("block_no", m.blockNo())
+                        .build())
+                .projections(columns)
+                .build());
+    String storedModel = stored.map(r -> r.getText("model")).orElse(null);
+    if (stored.isPresent() && TOKEN_COLUMNS.stream().anyMatch(column -> !stored.get().isNull(column))) {
+      long[] sum = counters(spent, m.sessionId(), usageModel(storedModel), m.accountId());
+      sum[0] -= 1;
+      for (int i = 0; i < TOKEN_COLUMNS.size(); i++) {
+        sum[i + 1] -= bigIntOrZero(stored.get(), TOKEN_COLUMNS.get(i));
+      }
+    }
+    // A null model is not written over the stored one, so the stored one is what the record keeps.
+    // The same goes for each count: the record keeps what it had where this run has none.
+    long[] sum = counters(spent, m.sessionId(), usageModel(m.model() != null ? m.model() : storedModel), m.accountId());
+    sum[0] += 1;
+    for (int i = 0; i < TOKEN_COLUMNS.size(); i++) {
+      sum[i + 1] += used[i] != null ? used[i] : stored.isPresent() ? bigIntOrZero(stored.get(), TOKEN_COLUMNS.get(i)) : 0;
+    }
+  }
+
+  private static long[] counters(Map<List<String>, long[]> spent, String sessionId, String model, String accountId) {
+    return spent.computeIfAbsent(List.of(sessionId, model, accountId), k -> new long[UsageRecord.COUNTERS]);
+  }
+
+  private static Long[] used(MessageRecord m) {
+    return new Long[] {
+      m.inputTokens(), m.outputTokens(), m.cacheReadTokens(), m.cacheCreationTokens(), m.thinkingTokens(),
+      m.cacheCreation5mTokens(), m.cacheCreation1hTokens(), m.webSearchRequests(), m.webFetchRequests()
+    };
+  }
+
+  private static long bigIntOrZero(Result result, String column) {
+    return result.isNull(column) ? 0 : result.getBigInt(column);
+  }
+
+  private static void addUsage(
+      DistributedTransaction tx, String sessionId, String model, String accountId, long[] delta)
+      throws TransactionException {
+    if (java.util.Arrays.stream(delta).allMatch(value -> value == 0)) {
+      return;
+    }
+    long[] sum = delta.clone();
+    Optional<Result> stored =
+        tx.get(
+            Get.newBuilder()
+                .namespace(NS)
+                .table(SESSION_USAGE)
+                .partitionKey(Key.ofText("session_id", sessionId))
+                .clusteringKey(Key.ofText("model", model))
+                .build());
+    if (stored.isPresent()) {
+      sum[0] += stored.get().getBigInt("messages");
+      for (int i = 0; i < TOKEN_COLUMNS.size(); i++) {
+        sum[i + 1] += bigIntOrZero(stored.get(), TOKEN_COLUMNS.get(i));
+      }
+    }
+    tx.upsert(usageUpsert(sessionId, model, accountId, sum));
+  }
+
+  private static Upsert usageUpsert(String sessionId, String model, String accountId, long[] sum) {
+    UpsertBuilder.Buildable upsert =
+        Upsert.newBuilder()
+            .namespace(NS)
+            .table(SESSION_USAGE)
+            .partitionKey(Key.ofText("session_id", sessionId))
+            .clusteringKey(Key.ofText("model", model))
+            .textValue("account_id", accountId)
+            .bigIntValue("messages", sum[0]);
+    for (int i = 0; i < TOKEN_COLUMNS.size(); i++) {
+      upsert.bigIntValue(TOKEN_COLUMNS.get(i), sum[i + 1]);
+    }
+    return upsert.build();
+  }
+
+  private static String usageModel(String model) {
+    return model == null || model.isBlank() ? UsageRecord.UNKNOWN_MODEL : model;
+  }
+
+  @Override
+  public List<UsageRecord> usage(String sessionId) {
+    return read(
+        tx -> {
+          List<UsageRecord> usage = new ArrayList<>();
+          for (Result r :
+              tx.scan(
+                  Scan.newBuilder()
+                      .namespace(NS)
+                      .table(SESSION_USAGE)
+                      .partitionKey(Key.ofText("session_id", sessionId))
+                      .build())) {
+            long[] sum = new long[UsageRecord.COUNTERS];
+            sum[0] = r.getBigInt("messages");
+            for (int i = 0; i < TOKEN_COLUMNS.size(); i++) {
+              sum[i + 1] = bigIntOrZero(r, TOKEN_COLUMNS.get(i));
+            }
+            usage.add(UsageRecord.of(sessionId, r.getText("account_id"), r.getText("model"), sum));
+          }
+          return usage;
+        });
+  }
+
+  @Override
+  public boolean buildUsageIfMissing() {
+    Get built =
+        Get.newBuilder()
+            .namespace(NS)
+            .table(SESSION_USAGE)
+            .partitionKey(Key.ofText("session_id", USAGE_BUILT))
+            .clusteringKey(Key.ofText("model", USAGE_BUILT))
+            .build();
+    if (read(tx -> tx.get(built).isPresent())) {
+      return false;
+    }
+    // Every record is read once, outside a transaction, as when deleting: see usedByAnotherSession.
+    Map<List<String>, long[]> spent = new LinkedHashMap<>();
+    List<String> usageColumns = new ArrayList<>(TOKEN_COLUMNS);
+    usageColumns.addAll(List.of("session_id", "account_id", "model"));
+    DistributedStorage storage = StorageFactory.create(properties).getStorage();
+    try (Scanner scanner =
+        storage.scan(
+            Scan.newBuilder()
+                .namespace(NS)
+                .table(MESSAGES)
+                .all()
+                .projections(usageColumns)
+                .build())) {
+      for (Result r : scanner) {
+        if (TOKEN_COLUMNS.stream().allMatch(r::isNull)) {
+          continue;
+        }
+        long[] sum = counters(spent, r.getText("session_id"), usageModel(r.getText("model")), r.getText("account_id"));
+        sum[0] += 1;
+        for (int i = 0; i < TOKEN_COLUMNS.size(); i++) {
+          sum[i + 1] += bigIntOrZero(r, TOKEN_COLUMNS.get(i));
+        }
+      }
+    } catch (ExecutionException | IOException e) {
+      throw new StoreException("could not sum up the usage of the recorded sessions", e);
+    } finally {
+      storage.close();
+    }
+    for (List<Map.Entry<List<String>, long[]>> batch : batches(new ArrayList<>(spent.entrySet()), DELETE_BATCH)) {
+      write(
+          tx -> {
+            for (Map.Entry<List<String>, long[]> entry : batch) {
+              List<String> key = entry.getKey();
+              tx.upsert(usageUpsert(key.get(0), key.get(1), key.get(2), entry.getValue()));
+            }
+          });
+    }
+    write(tx -> tx.upsert(usageUpsert(USAGE_BUILT, USAGE_BUILT, USAGE_BUILT, new long[UsageRecord.COUNTERS])));
+    return !spent.isEmpty();
   }
 
   private static void putContentIfAbsent(DistributedTransaction tx, String hash, String text)
@@ -348,10 +611,11 @@ public final class ScalarDbRecordStore implements RecordStore {
     text(upsert, "tool_use_id", m.toolUseId());
     text(upsert, "content_hash", m.contentHash());
     text(upsert, "preview", m.preview());
-    bigInt(upsert, "input_tokens", m.inputTokens());
-    bigInt(upsert, "output_tokens", m.outputTokens());
-    bigInt(upsert, "cache_read_tokens", m.cacheReadTokens());
-    bigInt(upsert, "cache_creation_tokens", m.cacheCreationTokens());
+    Long[] used = used(m);
+    for (int i = 0; i < TOKEN_COLUMNS.size(); i++) {
+      bigInt(upsert, TOKEN_COLUMNS.get(i), used[i]);
+    }
+    text(upsert, "attributes", m.attributes());
     return upsert.build();
   }
 
@@ -441,10 +705,32 @@ public final class ScalarDbRecordStore implements RecordStore {
                     r.getText("cc_version"),
                     r.getText("model"),
                     r.getText("title"),
-                    nullableBigInt(r, "ended_at")));
+                    nullableBigInt(r, "ended_at"),
+                    r.getText("entrypoint"),
+                    r.isNull("cost_usd") ? null : r.getDouble("cost_usd"),
+                    nullableBigInt(r, "api_duration_ms"),
+                    nullableBigInt(r, "tool_duration_ms"),
+                    nullableBigInt(r, "lines_added"),
+                    nullableBigInt(r, "lines_removed")));
           }
           return sessions;
         });
+  }
+
+  @Override
+  public Optional<SessionRecord> session(String sessionId, String accountId) {
+    // The row is keyed by when the session started, which only the row itself says.
+    for (String account : new LinkedHashSet<>(java.util.Arrays.asList(sessionAccount(sessionId).orElse(null), accountId))) {
+      if (account == null) {
+        continue;
+      }
+      Optional<SessionRecord> found =
+          sessions(account, Integer.MAX_VALUE).stream().filter(s -> s.sessionId().equals(sessionId)).findFirst();
+      if (found.isPresent()) {
+        return found;
+      }
+    }
+    return Optional.empty();
   }
 
   @Override
@@ -469,6 +755,12 @@ public final class ScalarDbRecordStore implements RecordStore {
                     orgId,
                     null,
                     r.getText("project_path"),
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
                     null,
                     null,
                     null,
@@ -513,7 +805,13 @@ public final class ScalarDbRecordStore implements RecordStore {
                     nullableBigInt(r, "input_tokens"),
                     nullableBigInt(r, "output_tokens"),
                     nullableBigInt(r, "cache_read_tokens"),
-                    nullableBigInt(r, "cache_creation_tokens")));
+                    nullableBigInt(r, "cache_creation_tokens"),
+                    nullableBigInt(r, "thinking_tokens"),
+                    nullableBigInt(r, "cache_creation_5m_tokens"),
+                    nullableBigInt(r, "cache_creation_1h_tokens"),
+                    nullableBigInt(r, "web_search_requests"),
+                    nullableBigInt(r, "web_fetch_requests"),
+                    r.getText("attributes")));
           }
           // The main thread reads first; sub-agents follow in id order.
           messages.sort(
@@ -621,6 +919,26 @@ public final class ScalarDbRecordStore implements RecordStore {
     for (String host : hosts) {
       write(tx -> deleteIngestStates(tx, host, sessionId));
     }
+    write(
+        tx -> {
+          Key partition = Key.ofText("session_id", sessionId);
+          for (Result r :
+              tx.scan(
+                  Scan.newBuilder()
+                      .namespace(NS)
+                      .table(SESSION_USAGE)
+                      .partitionKey(partition)
+                      .projection("model")
+                      .build())) {
+            tx.delete(
+                Delete.newBuilder()
+                    .namespace(NS)
+                    .table(SESSION_USAGE)
+                    .partitionKey(partition)
+                    .clusteringKey(Key.ofText("model", r.getText("model")))
+                    .build());
+          }
+        });
     for (List<Key> batch : batches(records, DELETE_BATCH)) {
       write(
           tx -> {

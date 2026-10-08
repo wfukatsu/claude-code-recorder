@@ -106,6 +106,8 @@ public final class Ingester {
     String model;
     String title;
     Long lastTs;
+    String entrypoint;
+    TranscriptParser.Cost cost;
 
     SessionMeta(Long startedAt) {
       this.startedAt = startedAt;
@@ -130,7 +132,13 @@ public final class Ingester {
           version,
           model,
           title,
-          lastTs);
+          lastTs,
+          entrypoint,
+          cost == null ? null : cost.usd(),
+          cost == null ? null : cost.apiMillis(),
+          cost == null ? null : cost.toolMillis(),
+          cost == null ? null : cost.linesAdded(),
+          cost == null ? null : cost.linesRemoved());
     }
 
     void observe(TranscriptParser.Line line) {
@@ -139,6 +147,9 @@ public final class Ingester {
       version = line.version() != null ? line.version() : version;
       model = line.model() != null ? line.model() : model;
       title = line.title() != null ? line.title() : title;
+      entrypoint = line.entrypoint() != null ? line.entrypoint() : entrypoint;
+      // Running totals: the last one written is the session's.
+      cost = line.cost() != null ? line.cost() : cost;
       if (line.ts() != null && (lastTs == null || line.ts() > lastTs)) {
         lastTs = line.ts();
       }
@@ -203,6 +214,8 @@ public final class Ingester {
           // the first block kept for the message, and on no later line of the same message.
           TranscriptParser.Usage usage =
               line.messageId() != null && line.messageId().equals(usageMessageId) ? null : line.usage();
+          // What the line says about itself goes, like the usage, on the first block kept for it.
+          String attributes = line.attributes() == null ? null : redactor.redact(line.attributes());
           int blockNo = 0;
           for (TranscriptParser.Block block : line.blocks()) {
             int thisBlock = blockNo++;
@@ -219,6 +232,8 @@ public final class Ingester {
               usage = null;
               usageMessageId = line.messageId();
             }
+            String said = attributes;
+            attributes = null;
             batch.add(
                 new MessageRecord(
                     sessionId,
@@ -241,7 +256,13 @@ public final class Ingester {
                     recorded == null ? null : recorded.input(),
                     recorded == null ? null : recorded.output(),
                     recorded == null ? null : recorded.cacheRead(),
-                    recorded == null ? null : recorded.cacheCreation()));
+                    recorded == null ? null : recorded.cacheCreation(),
+                    recorded == null ? null : recorded.thinking(),
+                    recorded == null ? null : recorded.cacheCreation5m(),
+                    recorded == null ? null : recorded.cacheCreation1h(),
+                    recorded == null ? null : recorded.webSearches(),
+                    recorded == null ? null : recorded.webFetches(),
+                    said));
           }
         }
         if (batchLines >= BATCH_LINES || batchChars >= BATCH_CHARS) {

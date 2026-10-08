@@ -28,6 +28,10 @@ ccrec sessions --day 20261007         # 組織の、ある日のセッション�
 ccrec show <session-id>               # やりとりの一覧（先頭のみ）
 ccrec show <session-id> --kind system_prompt --full
 ccrec show <session-id> --json
+ccrec summary <session-id>            # セッションの要約（金額、所要時間、ターン、ツール、使用量など）
+ccrec usage                           # 自分の直近のセッションの、モデル別のトークン使用量
+ccrec usage <session-id>              # そのセッションの分
+ccrec usage --day 20261007            # 組織の、ある日のセッションの分（アカウント × モデル）
 ccrec delete <session-id>             # 記録したセッションを削除する
 ```
 
@@ -61,15 +65,41 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 | テーブル | パーティションキー | クラスタリングキー | 内容 |
 |---|---|---|---|
 | `accounts` | `account_id` | – | メール、表示名、組織 |
-| `sessions` | `account_id` | `started_at` 降順, `session_id` | プロジェクト、ブランチ、モデル、タイトル |
+| `sessions` | `account_id` | `started_at` 降順, `session_id` | プロジェクト、ブランチ、モデル、タイトル、起動元、金額、API とツールの所要時間、変更行数 |
 | `sessions_by_day` | `org_id`, `day` | `started_at`, `session_id` | 組織 × 日の索引 |
-| `messages` | `session_id` | `agent_id`, `line_no`, `block_no` | 種別、ツール名、`message_id`、トークン数、本文のハッシュと先頭 1,000 文字 |
+| `messages` | `session_id` | `agent_id`, `line_no`, `block_no` | 種別、ツール名、`message_id`、トークン数など、付帯情報（`attributes`）、本文のハッシュと先頭 1,000 文字 |
 | `contents` | `content_hash` | `chunk_no` | 本文（gzip、6,000 バイト以下のチャンク） |
 | `ingest_state` | `host_id` | `source_path_hash` | 取り込み済みの位置 |
+| `session_usage` | `session_id` | `model` | セッション × モデルの API 応答数、トークン数、Web 検索・取得回数の合計 |
 
-`messages.kind` は `user_prompt` / `user_meta` / `assistant_text` / `thinking` / `tool_use` / `tool_result` / `system_prompt` / `tool_definitions` / `context` / `system` / `unknown` です。
+`messages.kind` は `user_prompt` / `user_meta` / `assistant_text` / `thinking` / `tool_use` / `tool_result` / `system_prompt` / `tool_definitions` / `context` / `system` / `cost` / `pr_link` / `unknown` です。ここに無い種類のブロック（画像など）は `user_<type>` / `assistant_<type>` として保存します。
 
 Claude Code は 1 回の API 応答をブロックごとの複数行に分けて書き、どの行にも同じトークン数を付けます。トークン数は `message_id` ごとに最初の 1 行にだけ記録するので、そのまま合計できます。
+
+### トークン使用量とモデル
+
+- 応答ごとの記録: `messages` の `model` と、`input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_creation_tokens`。`ccrec show` の各行にも表示します。
+- セッションごとの合計: `session_usage` に、モデル別の API 応答数とトークン数を持ちます。サブエージェントの分も、そのセッションに含めます。取り込みと同じトランザクションで加算するので、記録とずれません。同じ行を取り込み直しても二重には数えません。
+- `ccrec usage` は `ccrec sessions` と同じ絞り込み（`--limit` / `--account` / `--day` / `--org`）を受け取り、対象セッションの合計をアカウント × モデルで表示します。`--json` も使えます。
+- `session_usage` が無かった頃に記録したセッションの分は、書き込みを伴うコマンドか `ccrec usage` を最初に実行したときに、`messages` から 1 度だけ集計します。
+- トークン数の内訳として、thinking のトークン数（出力の内数）、キャッシュ書き込みの保持時間別（5 分 / 1 時間、キャッシュ書き込みの内数）、Web 検索・Web 取得の回数も、同じ 2 か所に記録します。
+- `<synthetic>` は Claude Code が API を呼ばずに作った応答で、トークン数は 0 です。
+
+### そのほかに記録する情報
+
+トランスクリプトの各行が持つ付帯情報を、`messages.attributes` に小さな JSON として保存します。該当する値がある行にだけ付き、文字列は 300 文字で切ります。
+
+| 行の種類 | 項目 |
+|---|---|
+| 応答 | `stop_reason`、`request_id`、`effort`、`thinking_ms`、`service_tier`、`speed`、`api_error`、`api_error_status`、`skill`、`plugin`、`mcp_server`、`mcp_tool` |
+| プロンプト・ツール結果 | `permission_mode`、`prompt_source`、`tool_denial`、`interrupted`、`compact_summary`、`file_path`、`lines_added`、`lines_removed`、`status`、`agent_id`、`resolved_model`、`tool_interrupted` |
+| `system` | ターンの `duration_ms` と `message_count`、フックの `hook_count` / `hook_errors` / `prevented_continuation`、圧縮の `compact_trigger` / `pre_tokens` / `post_tokens`、実行した `command` |
+| `cost` | `cost_usd`、`api_ms`、`tool_ms`、`duration_ms`、`lines_added`、`lines_removed` |
+| `pr_link` | `pr_number`、`pr_repository`、`pr_url` |
+
+- 金額（`cost`）は、Claude Code 自身がトランスクリプトに書いた累計です。このツールは単価を持たず、計算もしません。書かれないセッションもあり、その場合は空です。最新の値をセッション行にも持ち、モデル別の内訳は `cost` レコードの本文に入っています。
+- `ccrec summary <session-id>` は、これらをセッション単位にまとめて表示します。ターン数と所要時間、終了理由の内訳、API エラー、ツールごとの呼び出し回数とエラー回数、権限モード、使ったスキル・プラグイン・MCP サーバー、作成した PR などです。サブエージェントの分を含みます。
+- これらを記録する前に取り込んだ行には付きません。付け直すには、`ccrec delete <session-id>` のあと `ccrec import` で取り込み直してください。
 
 本文は SHA-256 で内容アドレス化しているので、セッションをまたいで同じシステムプロンプトや CLAUDE.md は 1 件にまとまります。
 

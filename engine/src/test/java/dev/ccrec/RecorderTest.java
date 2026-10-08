@@ -298,12 +298,14 @@ class RecorderTest {
         MessageRecord record =
             new MessageRecord(
                 SESSION, "main", line, 0, account, "user_prompt", null, 1L, null, null, null, null, null, null,
-                ContentCodec.hash("hello"), 5, "hello", null, null, null, null);
+                ContentCodec.hash("hello"), 5, "hello", null, null, null, null, null, null, null, null, null, null);
         store.writeBatch(
             List.of(record),
             java.util.Map.of(ContentCodec.hash("hello"), "hello"),
             new dev.ccrec.model.IngestState("host-1", "hash-" + line, "/x/" + SESSION + ".jsonl", 1, line, null),
-            new SessionRecord(account, 1_000L, SESSION, "org-1", "host-1", null, null, null, null, null, null));
+            new SessionRecord(
+                account, 1_000L, SESSION, "org-1", "host-1", null, null, null, null, null, null, null, null, null,
+                null, null, null));
       }
       assertTrue(store.sessionAccount(SESSION).isPresent());
 
@@ -330,6 +332,122 @@ class RecorderTest {
       assertFalse(deleted.session());
       assertEquals(1, deleted.messages());
       assertEquals(1, ingester.ingestSession(transcript, SESSION, ALICE).messages(), "an import records it anew");
+    }
+  }
+
+  @Test
+  void aSessionsUsageIsSummedPerModelAndCountedOnce(@TempDir Path dir) throws IOException {
+    String haiku = messageLine("msg_3", "{\"type\":\"text\",\"text\":\"quick\"}", 7).replace("claude-opus-5-5", "claude-haiku-4-5");
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(
+        transcript,
+        String.join(
+                "\n",
+                PROMPT,
+                // One API message over two lines, then another: two messages, not three.
+                messageLine("msg_1", "{\"type\":\"thinking\",\"thinking\":\"hm\"}", 100),
+                messageLine("msg_1", "{\"type\":\"text\",\"text\":\"one\"}", 100),
+                messageLine("msg_2", "{\"type\":\"text\",\"text\":\"two\"}", 50))
+            + "\n");
+    Path subagents = Files.createDirectories(dir.resolve(SESSION).resolve("subagents"));
+    Files.writeString(subagents.resolve("agent-abc123.jsonl"), haiku + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      List<dev.ccrec.model.UsageRecord> usage = store.usage(SESSION);
+      assertEquals(List.of("claude-haiku-4-5", "claude-opus-5-5"), usage.stream().map(u -> u.model()).toList());
+      assertEquals(1, usage.get(0).messages(), "a sub-agent's messages count towards the session");
+      assertEquals(7, usage.get(0).inputTokens());
+      assertEquals(2, usage.get(1).messages());
+      assertEquals(150, usage.get(1).inputTokens());
+      assertEquals(40, usage.get(1).outputTokens());
+      assertEquals("acct-alice", usage.get(1).accountId());
+
+      // More of the session, and all of it read again from the start as another host would.
+      Files.writeString(
+          transcript, messageLine("msg_4", "{\"type\":\"text\",\"text\":\"three\"}", 1) + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      new Ingester(store, Redactor.standard(), Syncer.NONE, true, "host-2").ingestSession(transcript, SESSION, ALICE);
+      List<dev.ccrec.model.UsageRecord> after = store.usage(SESSION);
+      assertEquals(3, after.get(1).messages());
+      assertEquals(151, after.get(1).inputTokens());
+      assertEquals(7, after.get(0).inputTokens());
+
+      // Summing up from the records, as for a store an earlier version filled, comes to the same.
+      assertTrue(store.buildUsageIfMissing());
+      assertEquals(after, store.usage(SESSION));
+      assertFalse(store.buildUsageIfMissing(), "and is done once");
+
+      store.deleteSession(SESSION, null, null);
+      assertTrue(store.usage(SESSION).isEmpty());
+    }
+  }
+
+  @Test
+  void recordsWhatTheTranscriptSaysBeyondTheExchange(@TempDir Path dir) throws IOException {
+    String answer =
+        "{\"type\":\"assistant\",\"timestamp\":\"2026-10-07T01:00:05.000Z\",\"entrypoint\":\"cli\",\"requestId\":\"req_1\","
+            + "\"effort\":\"medium\",\"thinkingDurationMs\":1500,\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-5-5\","
+            + "\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":10,\"output_tokens\":20,"
+            + "\"output_tokens_details\":{\"thinking_tokens\":8},\"cache_creation_input_tokens\":40,"
+            + "\"cache_creation\":{\"ephemeral_5m_input_tokens\":15,\"ephemeral_1h_input_tokens\":25},"
+            + "\"server_tool_use\":{\"web_search_requests\":2,\"web_fetch_requests\":1},\"service_tier\":\"standard\"},"
+            + "\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{}}]}}";
+    String edited =
+        "{\"type\":\"user\",\"timestamp\":\"2026-10-07T01:00:06.000Z\",\"permissionMode\":\"acceptEdits\","
+            + "\"toolUseResult\":{\"filePath\":\"/work/app/a.txt\",\"structuredPatch\":[{\"lines\":[\" same\",\"-old\",\"+new\",\"+more\"]}]},"
+            + "\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"ok\"}]}}";
+    String turn = "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":4200,\"messageCount\":3}";
+    String pr =
+        "{\"type\":\"pr-link\",\"prNumber\":7,\"prRepository\":\"org/repo\",\"prUrl\":\"https://github.com/org/repo/pull/7\"}";
+    String cost =
+        "{\"type\":\"cost-state\",\"totalCostUSD\":%s,\"totalAPIDuration\":9000,\"totalToolDuration\":300,"
+            + "\"totalLinesAdded\":2,\"totalLinesRemoved\":1,\"modelUsage\":{\"claude-opus-5-5\":{\"costUSD\":%s}}}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(
+        transcript, String.join("\n", PROMPT, answer, edited, turn, pr, String.format(cost, "0.5", "0.5")) + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      List<MessageRecord> messages = store.messages(SESSION);
+      assertEquals(
+          List.of("user_prompt", "tool_use", "tool_result", "system", "pr_link", "cost"),
+          messages.stream().map(MessageRecord::kind).toList());
+
+      MessageRecord use = messages.get(1);
+      assertEquals(8L, use.thinkingTokens());
+      assertEquals(15L, use.cacheCreation5mTokens());
+      assertEquals(25L, use.cacheCreation1hTokens());
+      assertEquals(2L, use.webSearchRequests());
+      assertEquals(1L, use.webFetchRequests());
+      assertTrue(use.attributes().contains("\"stop_reason\":\"tool_use\""), use.attributes());
+      assertTrue(use.attributes().contains("\"request_id\":\"req_1\""));
+      assertTrue(use.attributes().contains("\"thinking_ms\":1500"));
+      String result = messages.get(2).attributes();
+      assertTrue(result.contains("\"permission_mode\":\"acceptEdits\""), result);
+      assertTrue(result.contains("\"lines_added\":2") && result.contains("\"lines_removed\":1"), result);
+      assertTrue(messages.get(3).attributes().contains("\"duration_ms\":4200"));
+      assertEquals("https://github.com/org/repo/pull/7", messages.get(4).preview());
+      assertTrue(store.content(messages.get(5).contentHash()).orElseThrow().contains("modelUsage"));
+
+      SessionRecord session = store.session(SESSION, null).orElseThrow();
+      assertEquals("cli", session.entrypoint());
+      assertEquals(0.5, session.costUsd());
+      assertEquals(9000L, session.apiDurationMs());
+      assertEquals(2L, session.linesAdded());
+
+      dev.ccrec.model.UsageRecord usage = store.usage(SESSION).get(0);
+      assertEquals(8, usage.thinkingTokens());
+      assertEquals(25, usage.cacheCreation1hTokens());
+      assertEquals(3, usage.webSearchRequests() + usage.webFetchRequests());
+
+      // The running totals move on: the session keeps the last, and a run that sees none keeps that.
+      Files.writeString(transcript, String.format(cost, "1.25", "1.25") + "\n" + PROMPT + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      Files.writeString(transcript, PROMPT + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      assertEquals(1.25, store.session(SESSION, "acct-alice").orElseThrow().costUsd());
+      assertEquals("cli", store.session(SESSION, null).orElseThrow().entrypoint());
     }
   }
 
