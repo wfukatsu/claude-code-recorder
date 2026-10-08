@@ -20,6 +20,9 @@ const TEXT = {
     deletedNotice: (n) => `${n} 件のセッションを削除しました。`,
     deleteFailed: '削除できませんでした',
     busy: 'ほかの ccrec の処理が書き込み中です。少し待ってからやり直してください。',
+    order: '並び順',
+    newestFirst: '新しい順',
+    oldestFirst: '古い順',
     labelCommand: 'コマンド',
     labelNotice: '通知',
     labelOutput: 'コマンド出力',
@@ -199,6 +202,9 @@ const TEXT = {
     deletedNotice: (n) => (n === 1 ? '1 session was deleted.' : `${n} sessions were deleted.`),
     deleteFailed: 'Could not delete',
     busy: 'Another ccrec process is writing. Wait a moment and try again.',
+    order: 'Order',
+    newestFirst: 'Newest first',
+    oldestFirst: 'Oldest first',
     labelCommand: 'Command',
     labelNotice: 'Notice',
     labelOutput: 'Command output',
@@ -653,12 +659,16 @@ async function drawSessions(view, turn) {
   const fill = () => {
     const since = listFilters.days === 'all' ? 0 : Date.now() - Number(listFilters.days) * 86400000;
     const needle = listFilters.title.trim().toLowerCase();
-    const shown = sessions.filter(
-      (s) =>
-        (s.endedAt ?? s.startedAt) >= since &&
-        (!listFilters.project || s.projectPath === listFilters.project) &&
-        (!needle || `${s.title ?? ''} ${s.projectPath ?? ''}`.toLowerCase().includes(needle)),
-    );
+    // By when each was last active, which is the time the list shows: a session started long ago
+    // and still in use belongs at the top.
+    const shown = sessions
+      .filter(
+        (s) =>
+          (s.endedAt ?? s.startedAt) >= since &&
+          (!listFilters.project || s.projectPath === listFilters.project) &&
+          (!needle || `${s.title ?? ''} ${s.projectPath ?? ''}`.toLowerCase().includes(needle)),
+      )
+      .sort((a, b) => (b.endedAt ?? b.startedAt) - (a.endedAt ?? a.startedAt));
     // What a filter hides is not deleted along with what it shows.
     for (const id of [...selection]) if (!shown.some((s) => s.sessionId === id)) selection.delete(id);
     showSelection();
@@ -795,7 +805,13 @@ function stat(value, label) {
 
 // ---- one session -------------------------------------------------------------------------------
 
-const sessionView = { sessionId: null, tab: 'conversation', groups: new Set(SHOWN_AT_FIRST), agent: '' };
+const sessionView = {
+  sessionId: null,
+  tab: 'conversation',
+  groups: new Set(SHOWN_AT_FIRST),
+  agent: '',
+  order: remembered('order', 'desc'),
+};
 
 async function drawSession(view, sessionId, turn) {
   view.replaceChildren(el('p', { class: 'empty' }, t('loading')));
@@ -990,12 +1006,15 @@ function conversation(panel, sessionId, summary) {
   let run = 0;
   // Tool calls already on the page, by id, so that a result can be put where its call is.
   let callsShown = new Map();
+  // Newest first, a result comes before its call: it waits here for it.
+  let resultsWaiting = new Map();
 
   const load = async (fresh) => {
     const mine = fresh ? ++run : run;
     if (fresh) {
       loaded = 0;
       callsShown = new Map();
+      resultsWaiting = new Map();
       list.replaceChildren(el('p', { class: 'empty' }, t('loading')));
     }
     more.hidden = true;
@@ -1004,22 +1023,37 @@ function conversation(panel, sessionId, summary) {
       list.replaceChildren(el('p', { class: 'empty' }, t('noRecords')));
       return;
     }
-    const query = new URLSearchParams({ kinds: kinds.join(','), offset: String(loaded) });
+    const newestFirst = sessionView.order === 'desc';
+    const query = new URLSearchParams({ kinds: kinds.join(','), offset: String(loaded), order: sessionView.order });
     if (sessionView.agent) query.set('agent', sessionView.agent);
     const page = await api(`sessions/${encodeURIComponent(sessionId)}/records?${query}`);
     if (mine !== run) return;
     if (fresh) list.replaceChildren();
     for (const record of page.records) {
-      const call = record.kind === 'tool_result' || record.kind === 'mcp_meta' ? callsShown.get(record.toolUseId) : null;
+      const ofCall = (record.kind === 'tool_result' || record.kind === 'mcp_meta') && record.toolUseId;
+      const call = ofCall ? callsShown.get(record.toolUseId) : null;
       if (call) {
         call.attach(record);
         continue;
       }
+      if (ofCall && newestFirst) {
+        resultsWaiting.set(record.toolUseId, [record, ...(resultsWaiting.get(record.toolUseId) ?? [])]);
+        continue;
+      }
       const row = recordRow(record);
-      if (record.kind === 'tool_use' && record.toolUseId) callsShown.set(record.toolUseId, row);
+      if (record.kind === 'tool_use' && record.toolUseId) {
+        callsShown.set(record.toolUseId, row);
+        for (const result of resultsWaiting.get(record.toolUseId) ?? []) row.attach(result);
+        resultsWaiting.delete(record.toolUseId);
+      }
       list.append(row.node);
     }
     loaded += page.records.length;
+    if (loaded >= page.total) {
+      // Everything is here: a result whose call is not among what is shown stands by itself.
+      for (const results of resultsWaiting.values()) for (const result of results) list.append(recordRow(result).node);
+      resultsWaiting = new Map();
+    }
     if (loaded === 0) list.replaceChildren(el('p', { class: 'empty' }, t('noRecords')));
     more.hidden = loaded >= page.total;
     more.textContent = t('loadMore', loaded, page.total);
@@ -1045,6 +1079,23 @@ function conversation(panel, sessionId, summary) {
           },
         }),
         ` ${t(group)} (${whole(countOf(group))})`,
+      ),
+    ),
+    el(
+      'label',
+      {},
+      `${t('order')} `,
+      el(
+        'select',
+        {
+          onchange: (event) => {
+            sessionView.order = event.target.value;
+            remember('order', sessionView.order);
+            load(true).catch(showFailure);
+          },
+        },
+        el('option', { value: 'desc', selected: sessionView.order === 'desc' }, t('newestFirst')),
+        el('option', { value: 'asc', selected: sessionView.order === 'asc' }, t('oldestFirst')),
       ),
     ),
     summary.agents.length > 1

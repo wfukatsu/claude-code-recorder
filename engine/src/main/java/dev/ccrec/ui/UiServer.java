@@ -415,7 +415,8 @@ public final class UiServer implements AutoCloseable {
   }
 
   /**
-   * A page of a session's records in source order, optionally of some kinds and one agent only. The
+   * A page of a session's records in source order — or, with {@code order=desc}, from the last one
+   * back — optionally of some kinds and one agent only. The
    * text is its beginning; {@code whole} says whether that is all of it.
    */
   private ObjectNode records(String sessionId, Map<String, String> query) {
@@ -423,16 +424,19 @@ public final class UiServer implements AutoCloseable {
     String agent = query.get("agent");
     int offset = number(query, "offset", 0, Integer.MAX_VALUE);
     int limit = number(query, "limit", PAGE_RECORDS, PAGE_RECORDS);
+    List<MessageRecord> matching = new java.util.ArrayList<>();
+    for (MessageRecord m : store.messages(sessionId)) {
+      if ((kinds == null || kinds.contains(m.kind())) && (agent == null || agent.equals(m.agentId()))) {
+        matching.add(m);
+      }
+    }
+    // Newest first when asked: the end of a long session is then on the first page.
+    if ("desc".equals(query.get("order"))) {
+      java.util.Collections.reverse(matching);
+    }
     ObjectNode page = JSON.createObjectNode();
     ArrayNode records = page.putArray("records");
-    int matching = 0;
-    for (MessageRecord m : store.messages(sessionId)) {
-      if (kinds != null && !kinds.contains(m.kind()) || agent != null && !agent.equals(m.agentId())) {
-        continue;
-      }
-      if (matching++ < offset || records.size() >= limit) {
-        continue;
-      }
+    for (MessageRecord m : matching.subList(Math.min(offset, matching.size()), (int) Math.min((long) offset + limit, matching.size()))) {
       ObjectNode node = records.addObject();
       node.put("agentId", m.agentId());
       node.put("lineNo", m.lineNo());
@@ -459,7 +463,7 @@ public final class UiServer implements AutoCloseable {
       }
     }
     page.put("offset", offset);
-    page.put("total", matching);
+    page.put("total", matching.size());
     return page;
   }
 
