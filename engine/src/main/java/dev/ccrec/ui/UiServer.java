@@ -65,12 +65,19 @@ public final class UiServer implements AutoCloseable {
           "/", "index.html",
           "/app.js", "app.js",
           "/render.js", "render.js",
-          "/app.css", "app.css");
+          "/app.css", "app.css",
+          "/icon.svg", "icon.svg",
+          "/icon-32.png", "icon-32.png",
+          "/icon-180.png", "icon-180.png",
+          "/favicon.ico", "favicon.ico");
   private static final Map<String, String> CONTENT_TYPES =
       Map.of(
           "html", "text/html; charset=utf-8",
           "js", "text/javascript; charset=utf-8",
-          "css", "text/css; charset=utf-8");
+          "css", "text/css; charset=utf-8",
+          "svg", "image/svg+xml",
+          "png", "image/png",
+          "ico", "image/x-icon");
 
   private final RecordStore store;
   private final String currentAccountId;

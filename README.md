@@ -1,3 +1,5 @@
+<p><img src="docs/images/icon.svg" alt="" width="72" height="72" /></p>
+
 # claude-code-recorder
 
 English | [日本語](README.ja.md)

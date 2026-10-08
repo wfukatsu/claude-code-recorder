@@ -187,7 +187,19 @@ Dependency versions (checked against each registry on 2026-10-07): ScalarDB 3.19
 
 ### Documents
 
-The documents are in English, with a Japanese version beside each: `README.md` and `README.ja.md`, `docs/manual.md` and `docs/manual.ja.md`, `docs/reference.md` and `docs/reference.ja.md`. Each has a link to the other at its top. Screenshots are under `docs/images/en/` and `docs/images/ja/`. A change to one language's document belongs in the other as well.
+The documents are in English, with a Japanese version beside each: `README.md` and `README.ja.md`, `docs/manual.md` and `docs/manual.ja.md`, `docs/reference.md` and `docs/reference.ja.md`. Each has a link to the other at its top. Screenshots are under `docs/images/en/` and `docs/images/ja/`.
+
+The icon is drawn in `engine/src/main/resources/ui/icon.svg` — a prompt and a record light — and `docs/images/icon.svg` is a copy of it for the README. The PNG and ICO files beside it are rendered from the SVG; after changing it, render them again:
+
+```bash
+cd engine/src/main/resources/ui
+magick -background none -density 512 icon.svg -resize 32x32 icon-32.png
+magick -background none -density 512 icon.svg -resize 180x180 icon-180.png
+magick -background none -density 512 icon.svg -define icon:auto-resize=48,32,16 favicon.ico
+cp icon.svg ../../../../../docs/images/icon.svg
+```
+
+The prompt is drawn as filled shapes rather than a stroke, because ImageMagick's renderer left the stroke out. A change to one language's document belongs in the other as well.
 
 ### Releasing
 

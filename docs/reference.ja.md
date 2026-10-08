@@ -187,7 +187,19 @@ npm pack        # 配布用 .tgz（ビルド込み）
 
 ### ドキュメント
 
-ドキュメントは英語で書き、それぞれに日本語版を並べています。`README.md` と `README.ja.md`、`docs/manual.md` と `docs/manual.ja.md`、`docs/reference.md` と `docs/reference.ja.md` です。どの文書も、先頭にもう一方の言語へのリンクがあります。画面の画像は `docs/images/en/` と `docs/images/ja/` に分けています。片方の言語の文書を直すときは、もう一方も直してください。
+ドキュメントは英語で書き、それぞれに日本語版を並べています。`README.md` と `README.ja.md`、`docs/manual.md` と `docs/manual.ja.md`、`docs/reference.md` と `docs/reference.ja.md` です。どの文書も、先頭にもう一方の言語へのリンクがあります。画面の画像は `docs/images/en/` と `docs/images/ja/` に分けています。
+
+アイコンは `engine/src/main/resources/ui/icon.svg` に描いてあります（プロンプトと録画中のランプ）。`docs/images/icon.svg` は README 用の写しです。隣の PNG と ICO は SVG から作ったものなので、SVG を変えたら作り直してください。
+
+```bash
+cd engine/src/main/resources/ui
+magick -background none -density 512 icon.svg -resize 32x32 icon-32.png
+magick -background none -density 512 icon.svg -resize 180x180 icon-180.png
+magick -background none -density 512 icon.svg -define icon:auto-resize=48,32,16 favicon.ico
+cp icon.svg ../../../../../docs/images/icon.svg
+```
+
+プロンプトは線ではなく塗りの図形で描いています。ImageMagick のレンダラーが線を描かなかったためです。片方の言語の文書を直すときは、もう一方も直してください。
 
 ### リリース
 
