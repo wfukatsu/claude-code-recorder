@@ -508,6 +508,39 @@ class RecorderTest {
   }
 
   @Test
+  void sessionsDeletedTogetherTakeWhatOnlyTheyShare(@TempDir Path dir) throws IOException {
+    String second = "22222222-2222-3333-4444-555555555555";
+    String kept = "99999999-2222-3333-4444-555555555555";
+    String shared = "{\"type\":\"user\",\"timestamp\":\"2026-10-07T01:00:02.000Z\",\"message\":{\"role\":\"user\",\"content\":\"%s\"}}";
+    // The first two share a prompt with each other, and the system prompt with the third.
+    for (String id : List.of(SESSION, second)) {
+      Files.writeString(dir.resolve(id + ".jsonl"), SNAPSHOT + "\n" + String.format(shared, "asked in both") + "\n");
+    }
+    Files.writeString(dir.resolve(kept + ".jsonl"), SNAPSHOT + "\n" + String.format(shared, "asked elsewhere") + "\n");
+
+    try (RecordStore store = store(dir)) {
+      for (String id : List.of(SESSION, second, kept)) {
+        ingester(store, true).ingestSession(dir.resolve(id + ".jsonl"), id, ALICE);
+      }
+      String both = store.messages(SESSION).get(2).contentHash();
+      String systemPrompt = store.messages(SESSION).get(0).contentHash();
+
+      java.util.Map<String, RecordStore.Deleted> deleted =
+          store.deleteSessions(List.of(SESSION, second, "never-recorded"), null, null);
+
+      assertEquals(List.of(SESSION, second, "never-recorded"), List.copyOf(deleted.keySet()));
+      assertEquals(1, deleted.get(SESSION).contents(), "the prompt the two share goes with the first");
+      assertEquals(0, deleted.get(second).contents());
+      assertEquals(2, deleted.get(second).sharedContents());
+      assertFalse(deleted.get("never-recorded").anything());
+      assertTrue(store.content(both).isEmpty());
+      assertTrue(store.content(systemPrompt).isPresent(), "the third session still uses it");
+      assertEquals(List.of(kept), store.sessions("acct-alice", 10).stream().map(SessionRecord::sessionId).toList());
+      assertEquals(3, store.messages(kept).size());
+    }
+  }
+
+  @Test
   void contentIsChunkedBelowTheSmallestBlobLimit() {
     StringBuilder text = new StringBuilder();
     java.util.Random random = new java.util.Random(7);

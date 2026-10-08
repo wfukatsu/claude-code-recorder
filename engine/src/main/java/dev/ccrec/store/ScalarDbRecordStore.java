@@ -541,7 +541,7 @@ public final class ScalarDbRecordStore implements RecordStore {
     if (usageBuilt()) {
       return false;
     }
-    // Every record is read once, outside a transaction, as when deleting: see usedByAnotherSession.
+    // Every record is read once, outside a transaction, as when deleting: see usedBySessionsOtherThan.
     Map<List<String>, long[]> spent = new LinkedHashMap<>();
     List<String> usageColumns = new ArrayList<>(TOKEN_COLUMNS);
     usageColumns.addAll(List.of("session_id", "account_id", "model"));
@@ -907,8 +907,27 @@ public final class ScalarDbRecordStore implements RecordStore {
         });
   }
 
+  /** What there is of a session to delete: its records' keys, their contents and the accounts they name. */
+  private record Recorded(List<Key> records, Set<String> hashes, Set<String> accounts) {}
+
   @Override
-  public Deleted deleteSession(String sessionId, String accountId, String hostId) {
+  public Map<String, Deleted> deleteSessions(List<String> sessionIds, String accountId, String hostId) {
+    Map<String, Recorded> recorded = new LinkedHashMap<>();
+    Set<String> hashes = new HashSet<>();
+    for (String sessionId : sessionIds) {
+      Recorded of = recorded.computeIfAbsent(sessionId, id -> recordedOf(id, accountId));
+      hashes.addAll(of.hashes());
+    }
+    // Every record is read once for all of them, to tell the contents a session outside this
+    // deletion still refers to. A content only these sessions share goes with the first of them.
+    Set<String> shared = usedBySessionsOtherThan(recorded.keySet(), hashes);
+    Set<String> gone = new HashSet<>();
+    Map<String, Deleted> deleted = new LinkedHashMap<>();
+    recorded.forEach((sessionId, of) -> deleted.put(sessionId, delete(sessionId, of, shared, gone, hostId)));
+    return deleted;
+  }
+
+  private Recorded recordedOf(String sessionId, String accountId) {
     List<Key> records = new ArrayList<>();
     Set<String> hashes = new LinkedHashSet<>();
     // Records of one session can name more than one account, each with a session row of its own.
@@ -940,10 +959,14 @@ public final class ScalarDbRecordStore implements RecordStore {
           }
           return null;
         });
+    return new Recorded(records, hashes, accounts);
+  }
 
+  private Deleted delete(String sessionId, Recorded of, Set<String> shared, Set<String> gone, String hostId) {
+    List<Key> records = of.records();
+    Set<String> accounts = of.accounts();
     // Content first: once the records are gone, nothing says which content was this session's alone.
-    Set<String> shared = usedByAnotherSession(hashes, sessionId);
-    List<String> orphans = hashes.stream().filter(hash -> !shared.contains(hash)).toList();
+    List<String> orphans = of.hashes().stream().filter(hash -> !shared.contains(hash) && gone.add(hash)).toList();
     for (List<String> batch : batches(orphans, 20)) {
       write(
           tx -> {
@@ -1022,7 +1045,8 @@ public final class ScalarDbRecordStore implements RecordStore {
             }
           });
     }
-    return new Deleted(session, records.size(), orphans.size(), shared.size());
+    return new Deleted(
+        session, records.size(), orphans.size(), (int) of.hashes().stream().filter(shared::contains).count());
   }
 
   /** The session row and its by-day index row. The host a row names is added to {@code hosts}. */
@@ -1105,7 +1129,7 @@ public final class ScalarDbRecordStore implements RecordStore {
    * in memory. A record another process is writing at this moment is seen too, which errs on the
    * side of keeping its content.
    */
-  private Set<String> usedByAnotherSession(Set<String> hashes, String sessionId) {
+  private Set<String> usedBySessionsOtherThan(Set<String> sessionIds, Set<String> hashes) {
     Set<String> used = new HashSet<>();
     if (hashes.isEmpty()) {
       return used;
@@ -1121,7 +1145,7 @@ public final class ScalarDbRecordStore implements RecordStore {
                 .build())) {
       for (Result r : scanner) {
         String hash = r.getText("content_hash");
-        if (hash != null && hashes.contains(hash) && !sessionId.equals(r.getText("session_id"))) {
+        if (hash != null && hashes.contains(hash) && !sessionIds.contains(r.getText("session_id"))) {
           used.add(hash);
         }
       }

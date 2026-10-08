@@ -52,6 +52,7 @@ public final class Main {
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
   private static final long LOCK_WAIT_MILLIS = 60_000;
   private static final Duration QUEUE_RETENTION = Duration.ofDays(30);
+  private static final int DELETE_GROUP = 50;
   /** The sources of a prompt somebody, or a program driving Claude Code, sent. */
   private static final Set<String> PROMPTED = Set.of("typed", "suggestion_accepted", "queued", "sdk");
 
@@ -93,7 +94,7 @@ public final class Main {
     }
     Map<String, String> options = new HashMap<>();
     List<String> positional = new ArrayList<>();
-    Set<String> flags = Set.of("json", "full");
+    Set<String> flags = Set.of("json", "full", "dry-run");
     for (int i = 1; i < args.length; i++) {
       String arg = args[i];
       if (!arg.startsWith("--")) {
@@ -324,13 +325,16 @@ public final class Main {
   }
 
   /**
-   * Deletes recorded sessions, and keeps the hooks from recording them again: a session still open
-   * would otherwise be back, in part, at its next response.
+   * Deletes recorded sessions — those named, or with {@code --before} / {@code --older-than} those of
+   * the account whose last activity is that old — and keeps the hooks from recording them again: a
+   * session still open would otherwise be back, in part, at its next response.
    */
   private int delete() throws IOException {
-    if (positional.isEmpty()) {
-      throw new UsageException("delete needs at least one session id");
+    Instant cutoff = cutoff();
+    if (positional.isEmpty() == (cutoff == null)) {
+      throw new UsageException("delete needs session ids, or --before <date> or --older-than <days>d");
     }
+    boolean dryRun = options.containsKey("dry-run");
     String accountId =
         options.containsKey("account") ? options.get("account") : account(identity().path("account")).accountId();
     // Where this machine's ingest positions are, for a session that has no row to say.
@@ -342,29 +346,100 @@ public final class Main {
         throw new IllegalStateException("another ccrec process is writing; try again");
       }
       try (RecordStore store = openStoreForWriting()) {
-        for (String sessionId : positional) {
-          RecordStore.Deleted deleted = store.deleteSession(sessionId, accountId, hostId);
-          if (!deleted.anything()) {
-            missing++;
-            out.printf("%s  not recorded%n", sessionId);
-            continue;
-          }
-          if (sessionId.matches("[A-Za-z0-9_-]+")) {
-            Path spool = Files.createDirectories(home.resolve("spool"));
-            Files.deleteIfExists(spool.resolve(sessionId + ".json"));
-            Files.deleteIfExists(spool.resolve(sessionId + ".done"));
-            Path ignored = spool.resolve(sessionId + ".ignored");
-            if (!Files.exists(ignored)) {
-              Files.createFile(ignored);
+        List<String> sessionIds = new ArrayList<>(positional);
+        if (cutoff != null) {
+          for (SessionRecord s : store.sessions(accountId, Integer.MAX_VALUE)) {
+            long lastActivity = s.endedAt() != null ? s.endedAt() : s.startedAt();
+            if (lastActivity < cutoff.toEpochMilli()) {
+              sessionIds.add(s.sessionId());
+              if (dryRun) {
+                out.printf(
+                    "%s  %s  %s%n",
+                    TIME.format(Instant.ofEpochMilli(lastActivity)),
+                    s.sessionId(),
+                    s.title() != null ? s.title() : s.projectPath() != null ? s.projectPath() : "");
+              }
             }
           }
           out.printf(
-              "%s  deleted  records=%d  contents=%d  contents kept for other sessions=%d%n",
-              sessionId, deleted.messages(), deleted.contents(), deleted.sharedContents());
+              "%d session%s of %s last active before %s%s%n",
+              sessionIds.size(),
+              sessionIds.size() == 1 ? "" : "s",
+              accountId,
+              TIME.format(cutoff),
+              dryRun ? "; nothing deleted" : "");
+        }
+        if (dryRun) {
+          return 0;
+        }
+        long records = 0;
+        long contents = 0;
+        // In groups, so that what is known of the sessions being deleted stays small.
+        for (int from = 0; from < sessionIds.size(); from += DELETE_GROUP) {
+          List<String> group = sessionIds.subList(from, Math.min(from + DELETE_GROUP, sessionIds.size()));
+          for (Map.Entry<String, RecordStore.Deleted> entry : store.deleteSessions(group, accountId, hostId).entrySet()) {
+            String sessionId = entry.getKey();
+            RecordStore.Deleted deleted = entry.getValue();
+            if (!deleted.anything()) {
+              missing++;
+              out.printf("%s  not recorded%n", sessionId);
+              continue;
+            }
+            // Named, it may be resumed some day; picked by its age, only if the hooks still hold it.
+            forgetInQueue(sessionId, cutoff == null);
+            records += deleted.messages();
+            contents += deleted.contents();
+            out.printf(
+                "%s  deleted  records=%d  contents=%d  contents kept for other sessions=%d%n",
+                sessionId, deleted.messages(), deleted.contents(), deleted.sharedContents());
+          }
+        }
+        if (cutoff != null) {
+          out.printf("deleted %d sessions  records=%d  contents=%d%n", sessionIds.size() - missing, records, contents);
         }
       }
     }
     return missing == 0 ? 0 : 1;
+  }
+
+  private void forgetInQueue(String sessionId, boolean always) throws IOException {
+    if (!sessionId.matches("[A-Za-z0-9_-]+")) {
+      return;
+    }
+    Path spool = Files.createDirectories(home.resolve("spool"));
+    boolean queued = Files.deleteIfExists(spool.resolve(sessionId + ".json"));
+    Files.deleteIfExists(spool.resolve(sessionId + ".done"));
+    Path ignored = spool.resolve(sessionId + ".ignored");
+    if ((always || queued) && !Files.exists(ignored)) {
+      Files.createFile(ignored);
+    }
+  }
+
+  /** The time --before (a date, or an instant) or --older-than (days) names; null when neither is given. */
+  private Instant cutoff() {
+    String before = options.get("before");
+    String olderThan = options.get("older-than");
+    if (before != null && olderThan != null) {
+      throw new UsageException("give --before or --older-than, not both");
+    }
+    if (olderThan != null) {
+      if (!olderThan.matches("\\d{1,5}d")) {
+        throw new UsageException("--older-than needs a number of days such as 90d, not \"" + olderThan + "\"");
+      }
+      return Instant.now().minus(Duration.ofDays(Long.parseLong(olderThan.substring(0, olderThan.length() - 1))));
+    }
+    if (before == null) {
+      return null;
+    }
+    try {
+      return java.time.LocalDate.parse(before).atStartOfDay(ZoneId.systemDefault()).toInstant();
+    } catch (DateTimeParseException notADate) {
+      try {
+        return Instant.parse(before);
+      } catch (DateTimeParseException e) {
+        throw new UsageException("--before needs a date such as 2026-07-01, not \"" + before + "\"");
+      }
+    }
   }
 
   private void report(Ingester.Summary summary) {
