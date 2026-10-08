@@ -130,7 +130,7 @@ scalar.db.password=********
 scalar.db.transaction_manager=consensus-commit
 ```
 
-- 同梱の JAR に入っている JDBC ドライバーは SQLite / PostgreSQL / MariaDB です。それ以外（MySQL、Oracle など）は `~/.ccrec/drivers/` に JAR を置きます。
+- 同梱の JAR に入っている JDBC ドライバーは SQLite と PostgreSQL です。それ以外（MariaDB、MySQL、Oracle など）は `~/.ccrec/drivers/` に JAR を置きます。MariaDB のドライバー（ScalarDB は MySQL にもこれを使います）は LGPL のため同梱していません。[THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md) を見てください。
 - DynamoDB / Cosmos DB / Cassandra などを使う場合は、全アダプター入りの JAR をビルドします（約 170MB）。`npm run build:full` で `lib/ccrec-engine-full.jar` ができるので、`CCREC_JAR` でそれを指定します。
 - ScalarDB は SQLite を開発・テスト用途としています。このツールは書き込みを 1 プロセスに直列化して使いますが、全社の集約先には使わないでください。
 - SQLite ファイルを直接開くと、テーブル名は `ccrec$messages` の形で、ScalarDB のトランザクション用の列が付いています。直接書き込まないでください。

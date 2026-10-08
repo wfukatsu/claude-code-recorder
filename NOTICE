@@ -1,0 +1,8 @@
+claude-code-recorder
+Copyright 2026 The claude-code-recorder authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+The package distributed as claude-code-recorder-<version>.tgz contains, in
+lib/ccrec-engine.jar, third-party software under the licenses listed in
+THIRD-PARTY-NOTICES.md.

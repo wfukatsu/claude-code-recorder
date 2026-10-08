@@ -1,6 +1,6 @@
 {
   "name": "claude-code-recorder",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "description": "Records Claude Code exchanges (prompts, system prompt, responses, tool I/O, context) per account into a database through ScalarDB — SQLite locally, an RDBMS or NoSQL company-wide.",
   "keywords": [
@@ -30,7 +30,10 @@
     "lib/ccrec-engine.jar",
     "docs",
     "README.md",
-    "README.ja.md"
+    "README.ja.md",
+    "LICENSE",
+    "NOTICE",
+    "THIRD-PARTY-NOTICES.md"
   ],
   "engines": {
     "node": ">=18"
@@ -41,5 +44,5 @@
     "test": "node --test test/recorder.test.js && cd engine && ./gradlew -q test",
     "prepare": "npm run build"
   },
-  "license": "UNLICENSED"
+  "license": "Apache-2.0"
 }
