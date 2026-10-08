@@ -5,6 +5,10 @@ import { runHook } from './hook.js';
 import { resolveIdentity } from './identity.js';
 import { hooksInstalled, installHooks, uninstallHooks, userSettingsPath } from './install.js';
 import { ensureHome, homeDir } from './paths.js';
+import { queueStatus } from './queue.js';
+
+// An ingest takes seconds, and waits up to a minute for another one: past this, it is not coming.
+const STUCK_AFTER_MILLIS = 10 * 60 * 1000;
 
 const HELP = `ccrec — record Claude Code exchanges per account, through ScalarDB
 
@@ -14,16 +18,28 @@ Setup
       --project                  … to ./.claude/settings.json instead
       --settings <file>          … to a specific settings file
   ccrec uninstall-hooks          remove them (same options)
-  ccrec doctor                   check Java, the engine, the configuration and the hooks
+  ccrec doctor                   check Java, the engine, the configuration, the hooks and
+                                 that what the hooks queued is being recorded
 
 Recording
   ccrec import <file|dir>...     record existing transcripts (*.jsonl) under your account
-  ccrec ingest [--session <id>]  record what the hooks queued (the hooks do this themselves)
+  ccrec ingest                   record everything the hooks queued; run it when "ccrec doctor"
+                                 reports sessions waiting (the hooks do this themselves)
 
 Reading
   ccrec whoami                   the account recordings are filed under
   ccrec sessions [--limit n] [--account <id>] [--day yyyymmdd [--org <id>]] [--json]
   ccrec show <session-id> [--full] [--kind k1,k2] [--json]
+  ccrec summary <session-id> [--json]
+                                 one session at a glance: cost, durations, turns, stops, errors,
+                                 tools, permission modes, pull requests, usage
+  ccrec usage [<session-id>...] [--json]
+                                 tokens and API messages per model: of those sessions, or of
+                                 the sessions "ccrec sessions" lists with the same options
+
+Deleting
+  ccrec delete <session-id>...   delete recorded sessions for good, with the contents no other
+                                 session uses; the hooks stop recording them ("import" still can)
 
 Environment
   CCREC_HOME        data directory (default ~/.ccrec)
@@ -42,17 +58,41 @@ function settingsTarget(args) {
   return args.includes('--project') ? path.resolve('.claude', 'settings.json') : userSettingsPath();
 }
 
+function tail(file, lines) {
+  try {
+    const text = fs.readFileSync(file, 'utf8').trimEnd();
+    return text && text.split('\n').slice(-lines).map((line) => `  ${line}`).join('\n');
+  } catch {
+    return '';
+  }
+}
+
 function doctor() {
   const home = homeDir();
   const java = javaMajorVersion();
+  const queue = queueStatus(home);
+  const stuck = queue.waiting > 0 && Date.now() - queue.oldest > STUCK_AFTER_MILLIS;
+  const ingestLog = path.join(home, 'logs', 'ingest.log');
   const checks = [
     ['Java 17 or later', java !== null && java >= 17, java === null ? `${javaCommand()} not runnable` : `found ${java}`],
     ['engine JAR', fs.existsSync(jarPath()), jarPath()],
     ['ScalarDB configuration', fs.existsSync(path.join(home, 'database.properties')), path.join(home, 'database.properties')],
     ['hooks installed', hooksInstalled(userSettingsPath()), userSettingsPath()],
+    [
+      'queued sessions recorded',
+      !stuck,
+      queue.waiting === 0
+        ? 'none waiting'
+        : `${queue.waiting} waiting since ${new Date(queue.oldest).toLocaleString()}`,
+    ],
+    ['queue entries readable', queue.unreadable === 0, `${queue.unreadable} unreadable in ${path.join(home, 'spool')}`],
   ];
   for (const [name, ok, detail] of checks) {
     console.log(`${ok ? 'ok  ' : 'FAIL'}  ${name}  (${detail})`);
+  }
+  if (stuck) {
+    console.log(`\nRun "ccrec ingest" to record them now. Last lines of ${ingestLog}:`);
+    console.log(tail(ingestLog, 8) || '  (empty)');
   }
   const identity = resolveIdentity();
   console.log(`account  ${identity.account.account_id}  via ${identity.account.auth_method}`);
@@ -95,6 +135,9 @@ export async function main(args) {
     case 'import':
     case 'sessions':
     case 'show':
+    case 'delete':
+    case 'usage':
+    case 'summary':
       return runEngine(ensureHome(), [command, ...rest], resolveIdentity());
     default:
       console.error(`ccrec: unknown command "${command}"\n`);

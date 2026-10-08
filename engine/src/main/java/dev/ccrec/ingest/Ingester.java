@@ -9,9 +9,12 @@ import dev.ccrec.redact.Redactor;
 import dev.ccrec.store.RecordStore;
 import dev.ccrec.sync.Syncer;
 import dev.ccrec.transcript.TranscriptParser;
+import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
@@ -20,20 +23,25 @@ import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Reads a session's transcript files incrementally into a {@link RecordStore}.
  *
  * <p>Only complete lines past the stored offset are read, and each batch commits its records together
- * with the new offset, so an interrupted or repeated run neither loses nor duplicates anything.
+ * with the new offset and the session row, so an interrupted or repeated run neither loses nor
+ * duplicates anything, and no recorded line is left without its session.
  */
 public final class Ingester {
 
   private static final int BATCH_LINES = 50;
   private static final int BATCH_CHARS = 1_000_000;
   private static final int PREVIEW_CHARS = 1000;
+  /** Past this many characters of URLs, a further pull request is recorded each time it is linked. */
+  private static final int PR_URLS_CHARS = 3000;
 
   private final RecordStore store;
   private final Redactor redactor;
@@ -53,11 +61,17 @@ public final class Ingester {
     this.hostId = Account.keySafe(hostId);
   }
 
-  /** Ingests the main transcript and the sub-agent transcripts stored beside it. */
-  public Summary ingestSession(Path transcript, String sessionId, Account account) {
+  /**
+   * Ingests the main transcript and the sub-agent transcripts stored beside it.
+   *
+   * @param caller whose session this is, unless it already has records: a session stays with the
+   *     account that first recorded it, whoever is logged in when the rest of it is read
+   */
+  public Summary ingestSession(Path transcript, String sessionId, Account caller) {
+    Account account = store.sessionAccount(sessionId).flatMap(store::account).orElse(caller);
     store.upsertAccount(account, System.currentTimeMillis());
 
-    SessionMeta meta = new SessionMeta();
+    SessionMeta meta = new SessionMeta(firstTimestamp(transcript));
     FileResult main = ingestFile(transcript, sessionId, MessageRecord.MAIN_AGENT, account, meta);
     int files = 1;
     int lines = main.lines;
@@ -69,7 +83,7 @@ public final class Ingester {
         for (Path file : stream) {
           String name = file.getFileName().toString();
           String agentId = Account.keySafe(name.substring("agent-".length(), name.length() - ".jsonl".length()));
-          FileResult result = ingestFile(file, sessionId, agentId, account, new SessionMeta());
+          FileResult result = ingestFile(file, sessionId, agentId, account, null);
           files++;
           lines += result.lines;
           messages += result.messages;
@@ -79,33 +93,57 @@ public final class Ingester {
       }
     }
 
-    Long startedAt = firstTimestamp(transcript);
-    if (lines > 0 && startedAt != null) {
-      store.upsertSession(
-          new SessionRecord(
-              account.accountId(),
-              startedAt,
-              sessionId,
-              account.orgId(),
-              hostId,
-              meta.cwd,
-              meta.gitBranch,
-              meta.version,
-              meta.model,
-              meta.title,
-              meta.lastTs));
+    if (lines > 0 && meta.startedAt != null) {
       syncer.sessionUpdated(account.accountId(), sessionId);
     }
     return new Summary(sessionId, files, lines, messages);
   }
 
-  private static final class SessionMeta {
+  /** What the main transcript says about its session, gathered from the lines read so far. */
+  private final class SessionMeta {
+    /** The session's start: the first timestamp in its main transcript, the same on every run. */
+    final Long startedAt;
+
     String cwd;
     String gitBranch;
     String version;
     String model;
     String title;
     Long lastTs;
+    String entrypoint;
+    TranscriptParser.Cost cost;
+
+    SessionMeta(Long startedAt) {
+      this.startedAt = startedAt;
+    }
+
+    /**
+     * The session row as known so far, or null while the transcript has no timestamp to key it by.
+     * Fields no line has mentioned in this run are null, which leaves the stored value in place.
+     */
+    SessionRecord record(String sessionId, Account account) {
+      if (startedAt == null) {
+        return null;
+      }
+      return new SessionRecord(
+          account.accountId(),
+          startedAt,
+          sessionId,
+          account.orgId(),
+          hostId,
+          cwd,
+          gitBranch,
+          version,
+          model,
+          title,
+          lastTs,
+          entrypoint,
+          cost == null ? null : cost.usd(),
+          cost == null ? null : cost.apiMillis(),
+          cost == null ? null : cost.toolMillis(),
+          cost == null ? null : cost.linesAdded(),
+          cost == null ? null : cost.linesRemoved());
+    }
 
     void observe(TranscriptParser.Line line) {
       cwd = line.cwd() != null ? line.cwd() : cwd;
@@ -113,6 +151,9 @@ public final class Ingester {
       version = line.version() != null ? line.version() : version;
       model = line.model() != null ? line.model() : model;
       title = line.title() != null ? line.title() : title;
+      entrypoint = line.entrypoint() != null ? line.entrypoint() : entrypoint;
+      // Running totals: the last one written is the session's.
+      cost = line.cost() != null ? line.cost() : cost;
       if (line.ts() != null && (lastTs == null || line.ts() > lastTs)) {
         lastTs = line.ts();
       }
@@ -121,32 +162,27 @@ public final class Ingester {
 
   private record FileResult(int lines, int messages) {}
 
+  /**
+   * @param meta the session's metadata when {@code file} is its main transcript, which then writes
+   *     the session row with every batch; null for a sub-agent's transcript
+   */
   private FileResult ingestFile(
       Path file, String sessionId, String agentId, Account account, SessionMeta meta) {
     String absolute = file.toAbsolutePath().normalize().toString();
     String pathHash = ContentCodec.hash(absolute);
     IngestState state =
-        store.ingestState(hostId, pathHash).orElse(new IngestState(hostId, pathHash, absolute, 0, 0));
+        store.ingestState(hostId, pathHash).orElse(new IngestState(hostId, pathHash, absolute, 0, 0, null, null));
 
-    byte[] bytes;
-    long offset = state.offset();
+    long position = state.offset();
     int lineNo = state.lineNo();
-    try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
-      if (channel.size() < offset) {
-        // The file was replaced by a shorter one: read it again from the start.
-        offset = 0;
-        lineNo = 0;
-      }
-      ByteBuffer buffer = ByteBuffer.allocate(Math.toIntExact(channel.size() - offset));
-      channel.position(offset);
-      while (buffer.hasRemaining() && channel.read(buffer) >= 0) {
-        // keep reading
-      }
-      bytes = new byte[buffer.position()];
-      buffer.flip().get(bytes);
-    } catch (IOException e) {
-      throw new UncheckedIOException(e);
+    String usageMessageId = state.usageMessageId();
+    Set<String> prUrls = new LinkedHashSet<>();
+    if (state.prUrls() != null) {
+      prUrls.addAll(List.of(state.prUrls().split("\n")));
     }
+    // What a line with no record to put it on says about itself, for the next line of its API message.
+    String carried = null;
+    String carriedMessageId = null;
 
     List<MessageRecord> batch = new ArrayList<>();
     Map<String, String> contents = new LinkedHashMap<>();
@@ -154,73 +190,150 @@ public final class Ingester {
     int batchChars = 0;
     int totalLines = 0;
     int totalMessages = 0;
-    int lineStart = 0;
 
-    for (int i = 0; i < bytes.length; i++) {
-      if (bytes[i] != '\n') {
-        continue;
+    try (FileChannel channel = FileChannel.open(file, StandardOpenOption.READ)) {
+      if (channel.size() < position) {
+        // The file was replaced by a shorter one: read it again from the start.
+        position = 0;
+        lineNo = 0;
+        usageMessageId = null;
+        prUrls.clear();
       }
-      String raw = new String(bytes, lineStart, i - lineStart, StandardCharsets.UTF_8).strip();
-      lineStart = i + 1;
-      lineNo++;
-      totalLines++;
-      batchLines++;
-      if (!raw.isEmpty()) {
-        TranscriptParser.Line line = parser.parse(raw);
-        meta.observe(line);
-        int blockNo = 0;
-        for (TranscriptParser.Block block : line.blocks()) {
-          int thisBlock = blockNo++;
-          if (!recordThinking && block.kind().equals(TranscriptParser.THINKING)) {
-            continue;
+      // Read as a stream, a batch at a time: a first import can be a transcript of any size, and only
+      // the line being read and the batch being built are held in memory.
+      InputStream in = new BufferedInputStream(Channels.newInputStream(channel.position(position)), 1 << 16);
+      ByteArrayOutputStream pending = new ByteArrayOutputStream();
+      long read = position;
+      for (int next = in.read(); next >= 0; next = in.read()) {
+        read++;
+        if (next != '\n') {
+          pending.write(next);
+          continue;
+        }
+        // Whatever follows the last newline is a line Claude Code is still writing; it stays unread.
+        position = read;
+        String raw = pending.toString(StandardCharsets.UTF_8).strip();
+        pending.reset();
+        lineNo++;
+        totalLines++;
+        batchLines++;
+        if (!raw.isEmpty()) {
+          TranscriptParser.Line line = parser.parse(raw);
+          if (meta != null) {
+            meta.observe(line);
           }
-          String text = redactor.redact(block.text());
-          String hash = ContentCodec.hash(text);
-          if (contents.putIfAbsent(hash, text) == null) {
-            batchChars += text.length();
+          // One API message is written as several lines, each repeating its usage: it is recorded on
+          // the first block kept for the message, and on no later line of the same message.
+          TranscriptParser.Usage usage =
+              line.messageId() != null && line.messageId().equals(usageMessageId) ? null : line.usage();
+          // What the line says about itself goes, like the usage, on the first block kept for it.
+          String attributes = line.attributes();
+          // Other records may be written between two lines of one message; another message ends it.
+          if (carried != null && line.messageId() != null) {
+            if (carriedMessageId.equals(line.messageId())) {
+              attributes = TranscriptParser.merge(carried, attributes);
+            }
+            carried = null;
           }
-          TranscriptParser.Usage usage = thisBlock == 0 ? line.usage() : null;
-          batch.add(
-              new MessageRecord(
-                  sessionId,
-                  agentId,
-                  lineNo,
-                  thisBlock,
-                  account.accountId(),
-                  block.kind(),
-                  block.subtype(),
-                  line.ts(),
-                  line.uuid(),
-                  line.parentUuid(),
-                  line.model(),
-                  block.toolName(),
-                  block.toolUseId(),
-                  hash,
-                  text.getBytes(StandardCharsets.UTF_8).length,
-                  preview(text),
-                  usage == null ? null : usage.input(),
-                  usage == null ? null : usage.output(),
-                  usage == null ? null : usage.cacheRead(),
-                  usage == null ? null : usage.cacheCreation()));
+          attributes = attributes == null ? null : redactor.redact(attributes);
+          int blockNo = 0;
+          for (TranscriptParser.Block block : line.blocks()) {
+            int thisBlock = blockNo++;
+            if (!recordThinking && block.kind().equals(TranscriptParser.THINKING)) {
+              continue;
+            }
+            if (block.kind().equals(TranscriptParser.PR_LINK)) {
+              if (prUrls.contains(block.text())) {
+                continue;
+              }
+              remember(prUrls, block.text());
+            }
+            String text = redactor.redact(block.text());
+            String hash = ContentCodec.hash(text);
+            if (contents.putIfAbsent(hash, text) == null) {
+              batchChars += text.length();
+            }
+            TranscriptParser.Usage recorded = usage;
+            if (recorded != null) {
+              usage = null;
+              usageMessageId = line.messageId();
+            }
+            String said = attributes;
+            attributes = null;
+            batch.add(
+                new MessageRecord(
+                    sessionId,
+                    agentId,
+                    lineNo,
+                    thisBlock,
+                    account.accountId(),
+                    block.kind(),
+                    block.subtype(),
+                    line.ts(),
+                    line.uuid(),
+                    line.parentUuid(),
+                    line.messageId(),
+                    line.model(),
+                    block.toolName(),
+                    block.toolUseId(),
+                    hash,
+                    text.getBytes(StandardCharsets.UTF_8).length,
+                    preview(text),
+                    recorded == null ? null : recorded.input(),
+                    recorded == null ? null : recorded.output(),
+                    recorded == null ? null : recorded.cacheRead(),
+                    recorded == null ? null : recorded.cacheCreation(),
+                    recorded == null ? null : recorded.thinking(),
+                    recorded == null ? null : recorded.cacheCreation5m(),
+                    recorded == null ? null : recorded.cacheCreation1h(),
+                    recorded == null ? null : recorded.webSearches(),
+                    recorded == null ? null : recorded.webFetches(),
+                    said));
+          }
+          // A thinking block whose text is withheld leaves no record, yet its line is the one that
+          // says how long the thinking took: the next line of the same message says it instead.
+          if (attributes != null && line.messageId() != null) {
+            carried = attributes;
+            carriedMessageId = line.messageId();
+          }
+        }
+        if (batchLines >= BATCH_LINES || batchChars >= BATCH_CHARS) {
+          store.writeBatch(
+              batch,
+              contents,
+              new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId, joined(prUrls)),
+              meta == null ? null : meta.record(sessionId, account));
+          totalMessages += batch.size();
+          batch = new ArrayList<>();
+          contents = new LinkedHashMap<>();
+          batchLines = 0;
+          batchChars = 0;
         }
       }
-      if (batchLines >= BATCH_LINES || batchChars >= BATCH_CHARS) {
-        store.writeBatch(batch, contents, new IngestState(hostId, pathHash, absolute, offset + lineStart, lineNo));
-        totalMessages += batch.size();
-        batch = new ArrayList<>();
-        contents = new LinkedHashMap<>();
-        batchLines = 0;
-        batchChars = 0;
-      }
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
     }
     if (batchLines > 0) {
-      store.writeBatch(batch, contents, new IngestState(hostId, pathHash, absolute, offset + lineStart, lineNo));
+      store.writeBatch(
+          batch,
+          contents,
+          new IngestState(hostId, pathHash, absolute, position, lineNo, usageMessageId, joined(prUrls)),
+          meta == null ? null : meta.record(sessionId, account));
       totalMessages += batch.size();
     }
     return new FileResult(totalLines, totalMessages);
   }
 
-  /** The session's start: the first timestamp in its main transcript, the same on every run. */
+  private static void remember(Set<String> prUrls, String url) {
+    if (!url.contains("\n") && (prUrls.isEmpty() ? 0 : joined(prUrls).length()) + url.length() < PR_URLS_CHARS) {
+      prUrls.add(url);
+    }
+  }
+
+  private static String joined(Set<String> prUrls) {
+    return prUrls.isEmpty() ? null : String.join("\n", prUrls);
+  }
+
   private Long firstTimestamp(Path transcript) {
     try (var reader = Files.newBufferedReader(transcript, StandardCharsets.UTF_8)) {
       String raw;

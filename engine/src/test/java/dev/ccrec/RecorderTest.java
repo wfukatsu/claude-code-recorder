@@ -97,7 +97,7 @@ class RecorderTest {
       assertFalse(asked.contains("sk-ant-"), "credentials are masked before storage");
 
       MessageRecord thinking = messages.get(3);
-      assertEquals(10L, thinking.inputTokens(), "usage is recorded once per line, on its first block");
+      assertEquals(10L, thinking.inputTokens(), "usage is recorded once, on the first block");
       assertNull(messages.get(4).inputTokens());
       assertEquals("Bash", messages.get(5).toolName());
       assertEquals("a.txt", store.content(messages.get(6).contentHash()).orElseThrow());
@@ -149,6 +149,359 @@ class RecorderTest {
       assertEquals(
           List.of("main", "main", "main", "abc123"),
           messages.stream().map(MessageRecord::agentId).toList());
+    }
+  }
+
+  /** One line of an API message, the way Claude Code writes it: a single block, the usage repeated. */
+  private static String messageLine(String messageId, String block, int inputTokens) {
+    return "{\"type\":\"assistant\",\"timestamp\":\"2026-10-07T01:00:05.000Z\",\"message\":{\"id\":\"" + messageId
+        + "\",\"model\":\"claude-opus-5-5\",\"usage\":{\"input_tokens\":" + inputTokens + ",\"output_tokens\":20},"
+        + "\"content\":[" + block + "]}}";
+  }
+
+  @Test
+  void countsTheTokensOfAMessageOnceHoweverManyLinesItSpans(@TempDir Path dir) throws IOException {
+    String thinking = "{\"type\":\"thinking\",\"thinking\":\"let me think\"}";
+    String text = "{\"type\":\"text\",\"text\":\"answer\"}";
+    String toolUse = "{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Bash\",\"input\":{}}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(
+        transcript, PROMPT + "\n" + messageLine("m1", thinking, 10) + "\n" + messageLine("m1", text, 10) + "\n");
+
+    try (RecordStore store = store(dir)) {
+      // Thinking is left out, so the message's usage lands on the first block that is recorded.
+      Ingester ingester = ingester(store, false);
+      ingester.ingestSession(transcript, SESSION, ALICE);
+      // The same message goes on in a later run, and another one follows it.
+      Files.writeString(
+          transcript,
+          messageLine("m1", toolUse, 10) + "\n" + messageLine("m2", text, 7) + "\n",
+          StandardOpenOption.APPEND);
+      ingester.ingestSession(transcript, SESSION, ALICE);
+
+      List<MessageRecord> messages = store.messages(SESSION);
+      assertEquals(
+          List.of("user_prompt", "assistant_text", "tool_use", "assistant_text"),
+          messages.stream().map(MessageRecord::kind).toList());
+      assertEquals(java.util.Arrays.asList(null, "m1", "m1", "m2"), messages.stream().map(MessageRecord::messageId).toList());
+      assertEquals(
+          java.util.Arrays.asList(null, 10L, null, 7L),
+          messages.stream().map(MessageRecord::inputTokens).toList());
+    }
+  }
+
+  @Test
+  void aSessionIsRecordedWithItsFirstLinesEvenIfTheRunFailsLater(@TempDir Path dir) throws IOException {
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    // More than one batch of lines; the title comes in the last one.
+    Files.writeString(transcript, PROMPT + "\n" + (RESULT + "\n").repeat(60) + TITLE + "\n");
+
+    try (RecordStore store = store(dir)) {
+      int[] batches = {0};
+      RecordStore failing =
+          (RecordStore)
+              java.lang.reflect.Proxy.newProxyInstance(
+                  RecordStore.class.getClassLoader(),
+                  new Class<?>[] {RecordStore.class},
+                  (proxy, method, args) -> {
+                    if (method.getName().equals("writeBatch") && ++batches[0] == 2) {
+                      throw new IllegalStateException("the database went away");
+                    }
+                    return method.invoke(store, args);
+                  });
+      try {
+        ingester(failing, true).ingestSession(transcript, SESSION, ALICE);
+        org.junit.jupiter.api.Assertions.fail("the second batch should have failed");
+      } catch (IllegalStateException expected) {
+        // The first batch is committed, the rest is not.
+      }
+      SessionRecord partial = store.sessions("acct-alice", 10).get(0);
+      assertEquals("/work/app", partial.projectPath());
+      assertNull(partial.title());
+      assertEquals(SESSION, store.sessionsByDay("org-1", 20261007, 10).get(0).sessionId());
+
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      SessionRecord whole = store.sessions("acct-alice", 10).get(0);
+      assertEquals("/work/app", whole.projectPath(), "what an earlier run recorded is kept");
+      assertEquals("Recording design", whole.title());
+      assertEquals(61, store.messages(SESSION).size());
+      assertEquals(1, store.sessions("acct-alice", 10).size());
+    }
+  }
+
+  @Test
+  void deletingASessionTakesItsContentButLeavesWhatAnotherSessionUses(@TempDir Path dir) throws IOException {
+    String other = "99999999-2222-3333-4444-555555555555";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, String.join("\n", SNAPSHOT, PROMPT, ANSWER, RESULT) + "\n");
+    Path subagents = Files.createDirectories(dir.resolve(SESSION).resolve("subagents"));
+    Files.writeString(subagents.resolve("agent-abc123.jsonl"), RESULT + "\n");
+    // Another session under the same system prompt, with a prompt of its own.
+    Path otherTranscript = dir.resolve(other + ".jsonl");
+    Files.writeString(otherTranscript, SNAPSHOT + "\n" + PROMPT.replace("日本語の質問です", "another question") + "\n");
+
+    try (RecordStore store = store(dir)) {
+      Ingester ingester = ingester(store, true);
+      ingester.ingestSession(transcript, SESSION, ALICE);
+      ingester.ingestSession(otherTranscript, other, ALICE);
+      List<MessageRecord> before = store.messages(SESSION);
+      String systemPrompt = before.get(0).contentHash();
+      String asked = before.get(2).contentHash();
+
+      RecordStore.Deleted deleted = store.deleteSession(SESSION, null, null);
+      assertTrue(deleted.session());
+      assertEquals(before.size(), deleted.messages());
+      assertEquals(2, deleted.sharedContents(), "the system prompt and the tool definitions");
+      assertEquals(before.stream().map(MessageRecord::contentHash).distinct().count() - 2, deleted.contents());
+
+      assertTrue(store.messages(SESSION).isEmpty());
+      assertTrue(store.content(asked).isEmpty(), "what only this session held is gone");
+      assertTrue(store.content(systemPrompt).isPresent(), "what the other session uses is not");
+      assertEquals(List.of(other), store.sessions("acct-alice", 10).stream().map(SessionRecord::sessionId).toList());
+      assertEquals(
+          List.of(other), store.sessionsByDay("org-1", 20261007, 10).stream().map(SessionRecord::sessionId).toList());
+      assertEquals(3, store.messages(other).size());
+
+      assertFalse(store.deleteSession(SESSION, "acct-alice", null).anything(), "deleting again finds nothing");
+      // Its files are forgotten as well: importing them records the session anew, sub-agent included.
+      assertEquals(5, ingester.ingestSession(transcript, SESSION, ALICE).lines());
+      assertEquals(before.size(), store.messages(SESSION).size());
+      assertTrue(store.content(asked).isPresent());
+    }
+  }
+
+  @Test
+  void aSessionStaysWithTheAccountThatFirstRecordedIt(@TempDir Path dir) throws IOException {
+    Account bob = new Account("acct-bob", "bob@example.com", "Bob", "org-1", "Example", "oauth");
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, PROMPT + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      // The login has changed by the time the rest of the session is read.
+      Files.writeString(transcript, RESULT + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, bob);
+
+      assertEquals(2, store.messages(SESSION).size());
+      assertTrue(store.messages(SESSION).stream().allMatch(m -> m.accountId().equals("acct-alice")));
+      assertEquals(1, store.sessions("acct-alice", 10).size());
+      assertTrue(store.sessions("acct-bob", 10).isEmpty());
+    }
+  }
+
+  @Test
+  void deletingASessionFiledUnderTwoAccountsLeavesNoRowOfIt(@TempDir Path dir) {
+    // As a version that let an import re-file a session left it: one record and one row per account.
+    try (RecordStore store = store(dir)) {
+      for (String account : List.of("acct-alice", "acct-bob")) {
+        int line = account.equals("acct-alice") ? 1 : 2;
+        MessageRecord record =
+            new MessageRecord(
+                SESSION, "main", line, 0, account, "user_prompt", null, 1L, null, null, null, null, null, null,
+                ContentCodec.hash("hello"), 5, "hello", null, null, null, null, null, null, null, null, null, null);
+        store.writeBatch(
+            List.of(record),
+            java.util.Map.of(ContentCodec.hash("hello"), "hello"),
+            new dev.ccrec.model.IngestState("host-1", "hash-" + line, "/x/" + SESSION + ".jsonl", 1, line, null, null),
+            new SessionRecord(
+                account, 1_000L, SESSION, "org-1", "host-1", null, null, null, null, null, null, null, null, null,
+                null, null, null));
+      }
+      assertTrue(store.sessionAccount(SESSION).isPresent());
+
+      assertEquals(2, store.deleteSession(SESSION, null, null).messages());
+
+      assertTrue(store.sessions("acct-alice", 10).isEmpty());
+      assertTrue(store.sessions("acct-bob", 10).isEmpty());
+      assertTrue(store.sessionAccount(SESSION).isEmpty());
+    }
+  }
+
+  @Test
+  void deletingASessionThatHasNoRowStillForgetsItsFiles(@TempDir Path dir) throws IOException {
+    // No line carries a timestamp, so there is nothing to key a session row by.
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n");
+
+    try (RecordStore store = store(dir)) {
+      Ingester ingester = ingester(store, true);
+      assertEquals(1, ingester.ingestSession(transcript, SESSION, ALICE).messages());
+      assertTrue(store.sessions("acct-alice", 10).isEmpty());
+
+      RecordStore.Deleted deleted = store.deleteSession(SESSION, null, "host-1");
+      assertFalse(deleted.session());
+      assertEquals(1, deleted.messages());
+      assertEquals(1, ingester.ingestSession(transcript, SESSION, ALICE).messages(), "an import records it anew");
+    }
+  }
+
+  @Test
+  void aSessionsUsageIsSummedPerModelAndCountedOnce(@TempDir Path dir) throws IOException {
+    String haiku = messageLine("msg_3", "{\"type\":\"text\",\"text\":\"quick\"}", 7).replace("claude-opus-5-5", "claude-haiku-4-5");
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(
+        transcript,
+        String.join(
+                "\n",
+                PROMPT,
+                // One API message over two lines, then another: two messages, not three.
+                messageLine("msg_1", "{\"type\":\"thinking\",\"thinking\":\"hm\"}", 100),
+                messageLine("msg_1", "{\"type\":\"text\",\"text\":\"one\"}", 100),
+                messageLine("msg_2", "{\"type\":\"text\",\"text\":\"two\"}", 50))
+            + "\n");
+    Path subagents = Files.createDirectories(dir.resolve(SESSION).resolve("subagents"));
+    Files.writeString(subagents.resolve("agent-abc123.jsonl"), haiku + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      List<dev.ccrec.model.UsageRecord> usage = store.usage(SESSION);
+      assertEquals(List.of("claude-haiku-4-5", "claude-opus-5-5"), usage.stream().map(u -> u.model()).toList());
+      assertEquals(1, usage.get(0).messages(), "a sub-agent's messages count towards the session");
+      assertEquals(7, usage.get(0).inputTokens());
+      assertEquals(2, usage.get(1).messages());
+      assertEquals(150, usage.get(1).inputTokens());
+      assertEquals(40, usage.get(1).outputTokens());
+      assertEquals("acct-alice", usage.get(1).accountId());
+
+      // More of the session, and all of it read again from the start as another host would.
+      Files.writeString(
+          transcript, messageLine("msg_4", "{\"type\":\"text\",\"text\":\"three\"}", 1) + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      new Ingester(store, Redactor.standard(), Syncer.NONE, true, "host-2").ingestSession(transcript, SESSION, ALICE);
+      List<dev.ccrec.model.UsageRecord> after = store.usage(SESSION);
+      assertEquals(3, after.get(1).messages());
+      assertEquals(151, after.get(1).inputTokens());
+      assertEquals(7, after.get(0).inputTokens());
+
+      // Summing up from the records, as for a store an earlier version filled, comes to the same.
+      assertTrue(store.buildUsageIfMissing());
+      assertEquals(after, store.usage(SESSION));
+      assertFalse(store.buildUsageIfMissing(), "and is done once");
+
+      store.deleteSession(SESSION, null, null);
+      assertTrue(store.usage(SESSION).isEmpty());
+    }
+  }
+
+  @Test
+  void recordsWhatTheTranscriptSaysBeyondTheExchange(@TempDir Path dir) throws IOException {
+    String answer =
+        "{\"type\":\"assistant\",\"timestamp\":\"2026-10-07T01:00:05.000Z\",\"entrypoint\":\"cli\",\"requestId\":\"req_1\","
+            + "\"effort\":\"medium\",\"thinkingDurationMs\":1500,\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-5-5\","
+            + "\"stop_reason\":\"tool_use\",\"usage\":{\"input_tokens\":10,\"output_tokens\":20,"
+            + "\"output_tokens_details\":{\"thinking_tokens\":8},\"cache_creation_input_tokens\":40,"
+            + "\"cache_creation\":{\"ephemeral_5m_input_tokens\":15,\"ephemeral_1h_input_tokens\":25},"
+            + "\"server_tool_use\":{\"web_search_requests\":2,\"web_fetch_requests\":1},\"service_tier\":\"standard\"},"
+            + "\"content\":[{\"type\":\"tool_use\",\"id\":\"t1\",\"name\":\"Edit\",\"input\":{}}]}}";
+    String edited =
+        "{\"type\":\"user\",\"timestamp\":\"2026-10-07T01:00:06.000Z\",\"permissionMode\":\"acceptEdits\","
+            + "\"toolUseResult\":{\"filePath\":\"/work/app/a.txt\",\"structuredPatch\":[{\"lines\":[\" same\",\"-old\",\"+new\",\"+more\"]}]},"
+            + "\"message\":{\"role\":\"user\",\"content\":[{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":\"ok\"}]}}";
+    String turn = "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":4200,\"messageCount\":3}";
+    String pr =
+        "{\"type\":\"pr-link\",\"prNumber\":7,\"prRepository\":\"org/repo\",\"prUrl\":\"https://github.com/org/repo/pull/7\"}";
+    String cost =
+        "{\"type\":\"cost-state\",\"totalCostUSD\":%s,\"totalAPIDuration\":9000,\"totalToolDuration\":300,"
+            + "\"totalLinesAdded\":2,\"totalLinesRemoved\":1,\"modelUsage\":{\"claude-opus-5-5\":{\"costUSD\":%s}}}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(
+        transcript, String.join("\n", PROMPT, answer, edited, turn, pr, String.format(cost, "0.5", "0.5")) + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      List<MessageRecord> messages = store.messages(SESSION);
+      assertEquals(
+          List.of("user_prompt", "tool_use", "tool_result", "system", "pr_link", "cost"),
+          messages.stream().map(MessageRecord::kind).toList());
+
+      MessageRecord use = messages.get(1);
+      assertEquals(8L, use.thinkingTokens());
+      assertEquals(15L, use.cacheCreation5mTokens());
+      assertEquals(25L, use.cacheCreation1hTokens());
+      assertEquals(2L, use.webSearchRequests());
+      assertEquals(1L, use.webFetchRequests());
+      assertTrue(use.attributes().contains("\"stop_reason\":\"tool_use\""), use.attributes());
+      assertTrue(use.attributes().contains("\"request_id\":\"req_1\""));
+      assertTrue(use.attributes().contains("\"thinking_ms\":1500"));
+      String result = messages.get(2).attributes();
+      assertTrue(result.contains("\"permission_mode\":\"acceptEdits\""), result);
+      assertTrue(result.contains("\"lines_added\":2") && result.contains("\"lines_removed\":1"), result);
+      assertTrue(messages.get(3).attributes().contains("\"duration_ms\":4200"));
+      assertEquals("https://github.com/org/repo/pull/7", messages.get(4).preview());
+      assertTrue(store.content(messages.get(5).contentHash()).orElseThrow().contains("modelUsage"));
+
+      SessionRecord session = store.session(SESSION, null).orElseThrow();
+      assertEquals("cli", session.entrypoint());
+      assertEquals(0.5, session.costUsd());
+      assertEquals(9000L, session.apiDurationMs());
+      assertEquals(2L, session.linesAdded());
+
+      dev.ccrec.model.UsageRecord usage = store.usage(SESSION).get(0);
+      assertEquals(8, usage.thinkingTokens());
+      assertEquals(25, usage.cacheCreation1hTokens());
+      assertEquals(3, usage.webSearchRequests() + usage.webFetchRequests());
+
+      // The running totals move on: the session keeps the last, and a run that sees none keeps that.
+      Files.writeString(transcript, String.format(cost, "1.25", "1.25") + "\n" + PROMPT + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      Files.writeString(transcript, PROMPT + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      assertEquals(1.25, store.session(SESSION, "acct-alice").orElseThrow().costUsd());
+      assertEquals("cli", store.session(SESSION, null).orElseThrow().entrypoint());
+    }
+  }
+
+  @Test
+  void whatARecordlessLineSaysIsKeptOnTheNextLineOfItsMessage(@TempDir Path dir) throws IOException {
+    // The thinking text is withheld, so the line leaves no record — and it is the one with the duration.
+    String thought =
+        "{\"type\":\"assistant\",\"thinkingDurationMs\":7000,\"message\":{\"id\":\"msg_1\",\"stop_reason\":null,"
+            + "\"content\":[{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"c2ln\"}]}}";
+    String hook = "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_success\"}}";
+    String said =
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_1\",\"stop_reason\":\"end_turn\","
+            + "\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}}";
+    String next =
+        "{\"type\":\"assistant\",\"message\":{\"id\":\"msg_2\",\"stop_reason\":\"end_turn\","
+            + "\"content\":[{\"type\":\"text\",\"text\":\"more\"}]}}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    // The message thinks twice before it speaks; a hook's record comes in between.
+    Files.writeString(
+        transcript,
+        String.join("\n", PROMPT, thought, thought.replace("7000", "500"), hook, said, thought.replace("msg_1", "msg_9"), next)
+            + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      List<MessageRecord> texts =
+          store.messages(SESSION).stream().filter(m -> m.kind().equals(TranscriptParser.ASSISTANT_TEXT)).toList();
+      assertTrue(texts.get(0).attributes().contains("\"thinking_ms\":7500"), texts.get(0).attributes());
+      assertTrue(texts.get(0).attributes().contains("\"stop_reason\":\"end_turn\""));
+      assertFalse(texts.get(1).attributes().contains("thinking_ms"), "not on a line of another message");
+    }
+  }
+
+  @Test
+  void aPullRequestLinkedAgainAndAgainIsRecordedOnce(@TempDir Path dir) throws IOException {
+    String link = "{\"type\":\"pr-link\",\"prNumber\":%d,\"prUrl\":\"https://github.com/org/repo/pull/%d\"}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, String.join("\n", PROMPT, String.format(link, 7, 7), String.format(link, 7, 7)) + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      // Linked once more by the time of the next run, along with another.
+      Files.writeString(
+          transcript,
+          String.join("\n", String.format(link, 7, 7), String.format(link, 8, 8), String.format(link, 7, 7)) + "\n",
+          StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+
+      assertEquals(
+          List.of("https://github.com/org/repo/pull/7", "https://github.com/org/repo/pull/8"),
+          store.messages(SESSION).stream()
+              .filter(m -> m.kind().equals(TranscriptParser.PR_LINK))
+              .map(MessageRecord::preview)
+              .toList());
     }
   }
 

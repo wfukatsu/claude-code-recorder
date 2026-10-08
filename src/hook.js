@@ -2,9 +2,17 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnIngest } from './engine.js';
 import { resolveIdentity } from './identity.js';
-import { ensureHome } from './paths.js';
+import { ensureHome, homeDir } from './paths.js';
 
 const INGEST_ON = new Set(['Stop', 'SubagentStop', 'SessionEnd']);
+
+/** A project opts out by carrying this file at, or anywhere above, the directory Claude Code is in. */
+function optedOut(cwd) {
+  for (let dir = path.resolve(cwd); ; dir = path.dirname(dir)) {
+    if (fs.existsSync(path.join(dir, '.ccrec-ignore'))) return true;
+    if (dir === path.dirname(dir)) return false;
+  }
+}
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -28,11 +36,21 @@ export async function runHook(input) {
     const event = JSON.parse(input ?? (await readStdin()));
     const sessionId = event.session_id;
     if (!sessionId || !/^[A-Za-z0-9_-]+$/.test(sessionId) || !event.transcript_path) return 0;
-    // A project opts out by carrying this file at the directory Claude Code runs in.
-    if (event.cwd && fs.existsSync(path.join(event.cwd, '.ccrec-ignore'))) return 0;
+    // Ingesting reads the whole transcript, so an opt-out seen once holds for the rest of the session:
+    // the marker keeps a later event from another directory from queueing it after all.
+    const spool = path.join(homeDir(), 'spool');
+    const file = path.join(spool, `${sessionId}.json`);
+    const ignored = path.join(spool, `${sessionId}.ignored`);
+    if (fs.existsSync(ignored)) return 0;
+    if (event.cwd && optedOut(event.cwd)) {
+      home = ensureHome();
+      fs.writeFileSync(ignored, '', { mode: 0o600 });
+      fs.rmSync(file, { force: true });
+      fs.rmSync(path.join(spool, `${sessionId}.done`), { force: true });
+      return 0;
+    }
 
     home = ensureHome();
-    const file = path.join(home, 'spool', `${sessionId}.json`);
     let queued = {};
     try {
       queued = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -41,6 +59,7 @@ export async function runHook(input) {
     }
     // The account is fixed at the first event seen for a session and kept for its lifetime.
     const identity = queued.account ? { host_id: queued.host_id, account: queued.account } : resolveIdentity();
+    const now = new Date().toISOString();
     const entry = {
       session_id: sessionId,
       transcript_path: event.transcript_path,
@@ -48,7 +67,9 @@ export async function runHook(input) {
       host_id: identity.host_id,
       account: identity.account,
       ended: event.hook_event_name === 'SessionEnd',
-      updated_at: new Date().toISOString(),
+      updated_at: now,
+      // Compared with the engine's <session>.done mark: later than it means not yet recorded.
+      ingest_requested_at: INGEST_ON.has(event.hook_event_name) ? now : (queued.ingest_requested_at ?? null),
     };
     const temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(entry), { mode: 0o600 });

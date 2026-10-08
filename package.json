@@ -19,7 +19,7 @@
     "build": "cd engine && ./gradlew -q shadowJar",
     "build:full": "cd engine && ./gradlew -q shadowJar -Pfull",
     "test": "node --test test/recorder.test.js && cd engine && ./gradlew -q test",
-    "prepack": "npm run build"
+    "prepare": "npm run build"
   },
   "license": "UNLICENSED"
 }
