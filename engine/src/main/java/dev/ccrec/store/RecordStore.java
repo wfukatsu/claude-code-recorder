@@ -36,6 +36,9 @@ public interface RecordStore extends AutoCloseable {
 
   Optional<Account> account(String accountId);
 
+  /** Every account that has recorded, by id. There are as many as people, not as sessions. */
+  List<Account> accounts();
+
   /** The account a session's records are filed under, once it has any. */
   Optional<String> sessionAccount(String sessionId);
 

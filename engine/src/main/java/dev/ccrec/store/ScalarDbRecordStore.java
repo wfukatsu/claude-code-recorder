@@ -679,15 +679,30 @@ public final class ScalarDbRecordStore implements RecordStore {
                         .table(ACCOUNTS)
                         .partitionKey(Key.ofText("account_id", accountId))
                         .build())
-                .map(
-                    r ->
-                        new Account(
-                            r.getText("account_id"),
-                            r.getText("email"),
-                            r.getText("display_name"),
-                            r.getText("org_id"),
-                            r.getText("org_name"),
-                            r.getText("auth_method"))));
+                .map(ScalarDbRecordStore::accountOf));
+  }
+
+  @Override
+  public List<Account> accounts() {
+    return read(
+        tx -> {
+          List<Account> accounts = new ArrayList<>();
+          for (Result r : tx.scan(Scan.newBuilder().namespace(NS).table(ACCOUNTS).all().build())) {
+            accounts.add(accountOf(r));
+          }
+          accounts.sort(java.util.Comparator.comparing(Account::accountId));
+          return accounts;
+        });
+  }
+
+  private static Account accountOf(Result r) {
+    return new Account(
+        r.getText("account_id"),
+        r.getText("email"),
+        r.getText("display_name"),
+        r.getText("org_id"),
+        r.getText("org_name"),
+        r.getText("auth_method"));
   }
 
   @Override

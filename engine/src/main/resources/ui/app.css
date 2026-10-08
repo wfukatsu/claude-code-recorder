@@ -1,0 +1,420 @@
+:root {
+  --bg: #fbfaf8;
+  --panel: #ffffff;
+  --line: #e3e0da;
+  --text: #1f1d1a;
+  --muted: #6f6a62;
+  --accent: #b4532a;
+  --accent-soft: #f6e6dd;
+  --good: #2f7d4f;
+  --bad: #b3261e;
+  --code: #f3f1ed;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #181715;
+    --panel: #201f1c;
+    --line: #35322d;
+    --text: #ece9e3;
+    --muted: #a09a90;
+    --accent: #e08a5f;
+    --accent-soft: #3a2a21;
+    --good: #6fbf8c;
+    --bad: #f08a80;
+    --code: #262420;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* A class that sets display would otherwise show what the hidden attribute hides. */
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+a {
+  color: inherit;
+}
+
+.top {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
+.brand {
+  font-weight: 700;
+  font-family: var(--mono);
+  text-decoration: none;
+  color: var(--accent);
+}
+
+nav a {
+  margin-right: 12px;
+  text-decoration: none;
+  color: var(--muted);
+  padding: 4px 0;
+}
+
+nav a.current {
+  color: var(--text);
+  border-bottom: 2px solid var(--accent);
+}
+
+.grow {
+  flex: 1;
+}
+
+.control {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+select,
+input[type="search"],
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 4px 8px;
+}
+
+button {
+  cursor: pointer;
+}
+
+button.quiet {
+  color: var(--muted);
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px;
+}
+
+h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+  text-wrap: balance;
+}
+
+.sub {
+  color: var(--muted);
+  font-size: 13px;
+  margin-bottom: 16px;
+  overflow-wrap: anywhere;
+}
+
+.back {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 14px;
+  min-width: 110px;
+}
+
+.stat b {
+  display: block;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+.stat span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.scroll {
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+tr:last-child td {
+  border-bottom: 0;
+}
+
+th {
+  color: var(--muted);
+  font-weight: 500;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+td.num,
+th.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+td.when {
+  white-space: nowrap;
+  color: var(--muted);
+}
+
+tbody tr.link:hover {
+  background: var(--accent-soft);
+}
+
+td a.title {
+  text-decoration: none;
+  font-weight: 500;
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+td .project {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.tag {
+  display: inline-block;
+  font-size: 11px;
+  font-family: var(--mono);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--code);
+  color: var(--muted);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+
+.empty {
+  color: var(--muted);
+  padding: 32px;
+  text-align: center;
+}
+
+.error {
+  color: var(--bad);
+  padding: 16px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin: 18px 0 14px;
+}
+
+.tabs button {
+  border: 0;
+  background: none;
+  border-radius: 0;
+  padding: 8px 12px;
+  color: var(--muted);
+  border-bottom: 2px solid transparent;
+}
+
+.tabs button.current {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+
+.checks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-bottom: 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.checks label {
+  white-space: nowrap;
+}
+
+.record {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  margin-bottom: 6px;
+}
+
+.record > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 7px 12px;
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.record > summary::-webkit-details-marker {
+  display: none;
+}
+
+.record .time {
+  color: var(--muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.record .kind {
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  min-width: 5.5em;
+}
+
+.record .line {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.record .meta {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.record[open] > summary .line {
+  color: var(--muted);
+}
+
+.record.user_prompt {
+  border-left: 3px solid var(--accent);
+}
+
+.record.user_prompt .kind {
+  color: var(--accent);
+}
+
+.record.assistant_text .kind {
+  color: var(--good);
+}
+
+.record.failed .kind,
+.record .failed {
+  color: var(--bad);
+}
+
+.record.agent {
+  margin-left: 24px;
+}
+
+.body {
+  padding: 0 12px 10px;
+}
+
+.body h4 {
+  margin: 10px 0 4px;
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 500;
+}
+
+pre {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--code);
+  border-radius: 6px;
+  font: 12.5px/1.5 var(--mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 520px;
+  overflow: auto;
+}
+
+pre.prose {
+  font: inherit;
+  background: none;
+  padding: 2px 0;
+  max-height: none;
+}
+
+.more {
+  display: block;
+  margin: 14px auto;
+}
+
+dl.facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  margin: 0;
+}
+
+dl.facts dt {
+  color: var(--muted);
+}
+
+dl.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 720px) {
+  .top {
+    flex-wrap: wrap;
+    padding: 10px 16px;
+  }
+  main {
+    padding: 16px;
+  }
+  .record .meta {
+    display: none;
+  }
+}

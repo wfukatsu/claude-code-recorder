@@ -68,3 +68,50 @@ export function spawnIngest(home, sessionId, eventName) {
   child.unref();
   fs.closeSync(log);
 }
+
+function openInBrowser(url) {
+  const [command, args] =
+    process.platform === 'darwin'
+      ? ['open', [url]]
+      : process.platform === 'win32'
+        ? ['cmd', ['/c', 'start', '', url]]
+        : ['xdg-open', [url]];
+  const child = spawn(command, args, { stdio: 'ignore', detached: true });
+  // No browser to open it in: the address is on the terminal all the same.
+  child.on('error', () => {});
+  child.unref();
+}
+
+/**
+ * Runs the browser UI until it is stopped, and opens the address the engine prints once it listens —
+ * the address carries the token of that run.
+ */
+export function runUi(home, args, identity) {
+  if (!fs.existsSync(jarPath())) {
+    throw new Error(`engine JAR not found at ${jarPath()} — run "npm run build" in the package`);
+  }
+  const open = !args.includes('--no-open');
+  const child = spawn(javaCommand(), javaArgs(home, ['ui', ...args.filter((arg) => arg !== '--no-open')]), {
+    stdio: ['ignore', 'pipe', 'inherit'],
+    env: { ...process.env, CCREC_IDENTITY_JSON: JSON.stringify(identity) },
+  });
+  let pending = '';
+  let opened = false;
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (chunk) => {
+    process.stdout.write(chunk);
+    pending += chunk;
+    const address = /^ccrec ui: (http:\/\/\S+)$/m.exec(pending);
+    if (address && !opened) {
+      opened = true;
+      if (open) openInBrowser(address[1]);
+    }
+  });
+  // Ctrl-C reaches the engine as it reaches this process; wait for it rather than die first.
+  process.on('SIGINT', () => {});
+  process.on('SIGTERM', () => child.kill('SIGTERM'));
+  return new Promise((resolve, reject) => {
+    child.on('error', (error) => reject(new Error(`could not start Java (${error.code}); Java 17 or later is required`)));
+    child.on('exit', (code, signal) => resolve(signal ? 0 : (code ?? 1)));
+  });
+}
