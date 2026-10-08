@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { jarPath, javaCommand, javaMajorVersion, runEngine } from './engine.js';
+import { jarPath, javaCommand, javaMajorVersion, runEngine, runUi } from './engine.js';
 import { runHook } from './hook.js';
 import { resolveIdentity } from './identity.js';
 import { hooksInstalled, installHooks, uninstallHooks, userSettingsPath } from './install.js';
@@ -36,6 +36,11 @@ Reading
   ccrec usage [<session-id>...] [--json]
                                  tokens and API messages per model: of those sessions, or of
                                  the sessions "ccrec sessions" lists with the same options
+
+Browsing
+  ccrec ui [--port n] [--no-open]
+                                 browse the recordings in a browser, on this machine only: every
+                                 account in the database, in Japanese or English (default port 4127)
 
 Deleting
   ccrec delete <session-id>...   delete recorded sessions for good, with the contents no other
@@ -133,6 +138,8 @@ export async function main(args) {
       return 0;
     case 'doctor':
       return doctor();
+    case 'ui':
+      return runUi(ensureHome(), rest, resolveIdentity());
     case 'ingest':
     case 'import':
     case 'sessions':
