@@ -152,6 +152,7 @@ class UiServerTest {
       assertEquals(1, sessions.get(0).path("usage").path("messages").asInt());
       assertEquals(20, sessions.get(0).path("usage").path("outputTokens").asInt());
       assertEquals("claude-opus-5-5", sessions.get(0).path("models").get(0).asText());
+      assertEquals(20, sessions.get(0).path("usageByModel").get(0).path("outputTokens").asInt());
       assertEquals(1, json(server, "/api/sessions?account=acct-bob").size());
       assertEquals(0, json(server, "/api/sessions?account=nobody").size());
 
@@ -185,6 +186,58 @@ class UiServerTest {
       assertEquals(3000, content.length());
       assertEquals(404, get(server, "/api/content/" + "0".repeat(64), true).statusCode());
       assertEquals(404, get(server, "/api/content/not-a-hash", true).statusCode());
+    }
+  }
+
+  @Test
+  void theStatusSaysWhatTheHooksHoldAndWhereItRecordsWithoutTheWayIn(@TempDir Path dir) throws Exception {
+    Path home = Files.createDirectories(dir.resolve("home"));
+    Path spool = Files.createDirectories(home.resolve("spool"));
+    Files.createDirectories(home.resolve("logs"));
+    Files.writeString(home.resolve("config.json"), "{\"recordThinking\":true,\"redact\":true,\"exclude\":[\"context/hook_success\"]}");
+    Files.writeString(home.resolve("logs").resolve("ingest.log"), "2026-10-08T05:10:30.561Z Stop s1\ns1  files=1  new lines=23  new records=15\n");
+    Path config = home.resolve("database.properties");
+    Files.writeString(
+        config,
+        "scalar.db.storage=jdbc\nscalar.db.contact_points=jdbc:postgresql://app:hunter2@db.example.com/ccrec?password=hunter2&ssl=true\n"
+            + "scalar.db.password=hunter2\n");
+    // One session recorded since it was last asked for, one still waiting, one entry that cannot be read.
+    Files.writeString(
+        spool.resolve("s1.json"),
+        "{\"session_id\":\"s1\",\"last_event\":\"SubagentStop\",\"updated_at\":\"2026-10-08T05:10:31.000Z\","
+            + "\"ingest_requested_at\":\"2026-10-08T05:10:30.000Z\",\"ended\":false}");
+    Files.writeString(spool.resolve("s1.done"), "2026-10-08T05:10:30.500Z");
+    Files.writeString(
+        spool.resolve("s2.json"),
+        "{\"session_id\":\"s2\",\"last_event\":\"Stop\",\"updated_at\":\"2026-10-08T06:00:00.000Z\","
+            + "\"ingest_requested_at\":\"2026-10-08T06:00:00.000Z\",\"ended\":false}");
+    Files.writeString(spool.resolve("s3.json"), "{broken");
+    Files.writeString(spool.resolve("s4.json.bad"), "{broken");
+
+    JsonNode launcher = JSON.readTree("{\"version\":\"0.1.0\",\"hooksInstalled\":true}");
+    try (RecordStore store = store(dir);
+        UiServer server = new UiServer(store, "acct-alice", 0, TOKEN, home, config, launcher)) {
+      server.start();
+      HttpResponse<String> response = get(server, "/api/status", true);
+      assertEquals(200, response.statusCode());
+      assertFalse(response.body().contains("hunter2"), "the password is nowhere in it");
+      JsonNode status = JSON.readTree(response.body());
+
+      assertTrue(status.path("launcher").path("hooksInstalled").asBoolean());
+      assertEquals(2, status.path("accounts").asInt());
+      assertEquals("jdbc", status.path("database").path("storage").asText());
+      assertTrue(status.path("database").path("contactPoints").asText().contains("db.example.com/ccrec"));
+      assertEquals("context/hook_success", status.path("settings").path("exclude").get(0).asText());
+      assertEquals(2, status.path("ingestLog").size());
+
+      JsonNode queue = status.path("queue");
+      assertEquals(1, queue.path("waiting").asInt());
+      assertEquals("2026-10-08T06:00:00.000Z", queue.path("oldestWaiting").asText());
+      assertEquals(2, queue.path("unreadable").asInt());
+      assertEquals("s2", queue.path("entries").get(0).path("sessionId").asText(), "the latest first");
+      assertTrue(queue.path("entries").get(0).path("waiting").asBoolean());
+      assertEquals("SubagentStop", queue.path("entries").get(1).path("lastEvent").asText());
+      assertFalse(queue.path("entries").get(1).path("waiting").asBoolean());
     }
   }
 }

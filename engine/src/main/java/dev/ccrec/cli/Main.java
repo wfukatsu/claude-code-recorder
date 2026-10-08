@@ -185,9 +185,8 @@ public final class Main {
     if (sessionId.isEmpty()) {
       throw new UsageException("the entry has no session_id");
     }
-    String name = entry.getFileName().toString();
-    Path done = entry.resolveSibling(name.substring(0, name.length() - ".json".length()) + ".done");
-    if (only != null && !only.equals(sessionId) && !waiting(queued, done)) {
+    Path done = SpoolQueue.done(entry);
+    if (only != null && !only.equals(sessionId) && !SpoolQueue.waiting(queued, done)) {
       // Up to date. A session that never ended (a crash, a closed laptop) would otherwise stay forever.
       if (Files.getLastModifiedTime(entry).toInstant().isBefore(started.minus(QUEUE_RETENTION))) {
         Files.deleteIfExists(entry);
@@ -197,7 +196,7 @@ public final class Main {
     }
     Path transcript = Path.of(queued.path("transcript_path").asText(""));
     if (!Files.isRegularFile(transcript)) {
-      if (!waiting(queued, done)) {
+      if (!SpoolQueue.waiting(queued, done)) {
         // A session that has only started may have no transcript yet.
         return;
       }
@@ -220,31 +219,6 @@ public final class Main {
       // The mark of success `ccrec doctor` and the next run compare the hook's requests against. The
       // time is written into it: a file system may keep modification times to the second only.
       Files.writeString(done, started.toString());
-    }
-  }
-
-  /** Whether the hook asked for this session to be ingested after its last successful ingest. */
-  private static boolean waiting(JsonNode queued, Path done) throws IOException {
-    String requested = queued.path("ingest_requested_at").asText("");
-    if (requested.isEmpty()) {
-      return false;
-    }
-    if (!Files.exists(done)) {
-      return true;
-    }
-    try {
-      return Instant.parse(requested).isAfter(recordedAt(done));
-    } catch (DateTimeParseException e) {
-      return true;
-    }
-  }
-
-  /** When the ingest that left this mark started; a mark left by an earlier version says it by its age alone. */
-  private static Instant recordedAt(Path done) throws IOException {
-    try {
-      return Instant.parse(Files.readString(done).strip());
-    } catch (DateTimeParseException e) {
-      return Files.getLastModifiedTime(done).toInstant();
     }
   }
 
@@ -752,8 +726,11 @@ public final class Main {
         System.getenv("CCREC_IDENTITY_JSON") == null ? null : account(identity().path("account")).accountId();
     try (RecordStore store = openStore()) {
       UiServer server;
+      // What only the launcher can tell: its version, and whether the hooks are installed.
+      String launcher = System.getenv("CCREC_UI_INFO");
+      JsonNode info = launcher == null || launcher.isBlank() ? JSON.createObjectNode() : JSON.readTree(launcher);
       try {
-        server = new UiServer(store, accountId, port, token);
+        server = new UiServer(store, accountId, port, token, home, config, info);
       } catch (java.net.BindException e) {
         throw new UsageException("port " + port + " is in use; choose another with --port");
       }

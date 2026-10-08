@@ -86,14 +86,14 @@ function openInBrowser(url) {
  * Runs the browser UI until it is stopped, and opens the address the engine prints once it listens —
  * the address carries the token of that run.
  */
-export function runUi(home, args, identity) {
+export function runUi(home, args, identity, info = {}) {
   if (!fs.existsSync(jarPath())) {
     throw new Error(`engine JAR not found at ${jarPath()} — run "npm run build" in the package`);
   }
   const open = !args.includes('--no-open');
   const child = spawn(javaCommand(), javaArgs(home, ['ui', ...args.filter((arg) => arg !== '--no-open')]), {
     stdio: ['ignore', 'pipe', 'inherit'],
-    env: { ...process.env, CCREC_IDENTITY_JSON: JSON.stringify(identity) },
+    env: { ...process.env, CCREC_IDENTITY_JSON: JSON.stringify(identity), CCREC_UI_INFO: JSON.stringify(info) },
   });
   let pending = '';
   let opened = false;
