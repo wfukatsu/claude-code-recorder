@@ -34,6 +34,9 @@ public interface RecordStore extends AutoCloseable {
 
   Optional<Account> account(String accountId);
 
+  /** The account a session's records are filed under, once it has any. */
+  Optional<String> sessionAccount(String sessionId);
+
   /** Newest first. */
   List<SessionRecord> sessions(String accountId, int limit);
 
@@ -44,6 +47,22 @@ public interface RecordStore extends AutoCloseable {
   List<MessageRecord> messages(String sessionId);
 
   Optional<String> content(String contentHash);
+
+  /** What {@link #deleteSession} removed; {@code sharedContents} were kept for the sessions that still use them. */
+  record Deleted(boolean session, int messages, int contents, int sharedContents) {
+    public boolean anything() {
+      return session || messages > 0;
+    }
+  }
+
+  /**
+   * Removes a session: its row and by-day index row, its records, how far its files were ingested,
+   * and every content no other session refers to. Repeating it after an interruption finishes the job.
+   *
+   * @param accountId where else to look for the session row, besides the accounts its records name;
+   *     may be null
+   */
+  Deleted deleteSession(String sessionId, String accountId);
 
   @Override
   void close();

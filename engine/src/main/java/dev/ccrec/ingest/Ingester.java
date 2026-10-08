@@ -57,8 +57,14 @@ public final class Ingester {
     this.hostId = Account.keySafe(hostId);
   }
 
-  /** Ingests the main transcript and the sub-agent transcripts stored beside it. */
-  public Summary ingestSession(Path transcript, String sessionId, Account account) {
+  /**
+   * Ingests the main transcript and the sub-agent transcripts stored beside it.
+   *
+   * @param caller whose session this is, unless it already has records: a session stays with the
+   *     account that first recorded it, whoever is logged in when the rest of it is read
+   */
+  public Summary ingestSession(Path transcript, String sessionId, Account caller) {
+    Account account = store.sessionAccount(sessionId).flatMap(store::account).orElse(caller);
     store.upsertAccount(account, System.currentTimeMillis());
 
     SessionMeta meta = new SessionMeta(firstTimestamp(transcript));

@@ -110,9 +110,10 @@ public final class TranscriptParser {
       }
       case "system" -> {
         // Some subtypes (a turn's duration, a hook summary) say what they have to say in fields of
-        // their own rather than in content: those are kept as the whole record.
+        // their own rather than in content, or in an empty one: those are kept as the whole record.
         String content = stringify(node.path("content"));
-        add(blocks, SYSTEM, textOrNull(node.path("subtype")), content != null ? content : raw, null, null);
+        boolean said = content != null && !content.isEmpty();
+        add(blocks, SYSTEM, textOrNull(node.path("subtype")), said ? content : raw, null, null);
       }
       case "ai-title" -> title = textOrNull(node.path("aiTitle"));
       default -> {

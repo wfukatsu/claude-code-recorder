@@ -16,7 +16,7 @@ ccrec doctor          # Java・エンジン・設定・フック・未記録セ�
 ccrec install-hooks   # ~/.claude/settings.json に記録用フックを追加
 ```
 
-Git から直接インストールする場合は、インストール時にエンジンをビルドするので JDK 17 以降が必要です。
+Git から直接インストールする場合は、インストール時にエンジンをビルドします（`prepare` スクリプト）。JDK 17 以降と、Gradle が依存ライブラリを取得するためのネットワーク接続が必要です。
 
 ## 使い方
 
@@ -28,6 +28,7 @@ ccrec sessions --day 20261007         # 組織の、ある日のセッション�
 ccrec show <session-id>               # やりとりの一覧（先頭のみ）
 ccrec show <session-id> --kind system_prompt --full
 ccrec show <session-id> --json
+ccrec delete <session-id>             # 記録したセッションを削除する
 ```
 
 フックを入れた後は、応答のたびに自動で差分が記録されます。フック自体はキューに積むだけ（約 0.04 秒）で、データベースへの書き込みは別プロセスが行います。
@@ -52,7 +53,7 @@ Claude Code ─ フック(SessionStart / Stop / SubagentStop / SessionEnd) ─�
 2. Claude Code にログイン中の OAuth アカウント（`accountUuid` / `organizationUuid`）
 3. OS のユーザー名（`local-<user>`）
 
-アカウントはセッションの最初のイベントで確定し、そのセッション中は変わりません。これは端末側の自己申告です。全社で集める場合は、収集側で送信者を認証してアカウントを確定させてください。
+アカウントはセッションの最初のイベントで確定し、そのセッション中は変わりません。記録のあるセッションの続きは、あとから別のアカウントで取り込んでも（ログインの切り替え後の `ccrec import` など）、最初に記録したアカウントに付きます。これは端末側の自己申告です。全社で集める場合は、収集側で送信者を認証してアカウントを確定させてください。
 
 ### テーブル（名前空間 `ccrec`）
 
@@ -86,6 +87,16 @@ Claude Code は 1 回の API 応答をブロックごとの複数行に分けて
 - 置かれた場所で見分けられる値（値だけを伏せ、前後は残します）: URL 内のパスワード（`postgres://app:[REDACTED]@host/db`）、`Authorization` ヘッダーと `Bearer` の値、Azure の `AccountKey=`、名前が秘密を示す大文字の代入（`DB_PASSWORD=`、`AWS_SECRET_ACCESS_KEY=`、`GITHUB_TOKEN=` など）
 
 記録の除外: 環境変数 `CCREC_DISABLE=1`、またはプロジェクト直下に `.ccrec-ignore` を置く。`.ccrec-ignore` はその配下のどのディレクトリで作業していても効き、一度該当したセッションは最後まで記録されません（`ccrec import` も同じファイルを見ます）。
+
+### 記録の削除
+
+`ccrec delete <session-id>...` は、セッションの行、日別の索引、やりとりの記録、取り込み位置、そしてほかのセッションが使っていない本文を削除します。元に戻せません。
+
+- 同じシステムプロンプトのように、ほかのセッションも参照している本文は残します。参照の有無は `messages` を 1 回全件読んで確かめるので、記録が多いほど時間がかかります。
+- 削除したセッションは、フックからは以後記録されません（`spool/<session>.ignored` を置きます）。`ccrec import` で明示的に取り込めば、最初から記録し直します。
+- トランスクリプト（`~/.claude/projects/` 配下の JSONL）は消しません。
+- SQLite のファイルサイズは減りません。空いた領域は以後の記録に再利用されます。ファイルからも痕跡を消すには、`sqlite3 ~/.ccrec/ccrec.sqlite3 VACUUM` を実行してください。
+- 途中で止まった場合は、同じコマンドをもう一度実行すれば残りを削除します。
 
 ## データベースを切り替える
 

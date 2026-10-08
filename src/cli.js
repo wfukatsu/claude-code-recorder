@@ -31,6 +31,10 @@ Reading
   ccrec sessions [--limit n] [--account <id>] [--day yyyymmdd [--org <id>]] [--json]
   ccrec show <session-id> [--full] [--kind k1,k2] [--json]
 
+Deleting
+  ccrec delete <session-id>...   delete recorded sessions for good, with the contents no other
+                                 session uses; the hooks stop recording them ("import" still can)
+
 Environment
   CCREC_HOME        data directory (default ~/.ccrec)
   CCREC_ACCOUNT_ID  account id set by an administrator; overrides the Claude login
@@ -125,6 +129,7 @@ export async function main(args) {
     case 'import':
     case 'sessions':
     case 'show':
+    case 'delete':
       return runEngine(ensureHome(), [command, ...rest], resolveIdentity());
     default:
       console.error(`ccrec: unknown command "${command}"\n`);

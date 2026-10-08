@@ -119,4 +119,23 @@ class MainTest {
     assertEquals(0, Main.run(new String[] {"ingest", "--session", "other", "--home", home.toString()}));
     assertTrue(Files.getLastModifiedTime(spool.resolve("current.done")).compareTo(marked) > 0);
   }
+
+  @Test
+  void aDeletedSessionIsGoneAndTheHooksLeaveItAlone(@TempDir Path dir) throws IOException {
+    Path home = home(dir);
+    Path spool = home.resolve("spool");
+    queue(home, "gone", transcript(dir, "gone"), false, Instant.now().toString());
+    queue(home, "kept", transcript(dir, "kept"), false, Instant.now().toString());
+    assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
+
+    String[] delete = {"delete", "gone", "--account", "acct-1", "--home", home.toString()};
+    assertEquals(0, Main.run(delete));
+
+    assertEquals(List.of("kept"), sessions(home).stream().map(SessionRecord::sessionId).toList());
+    assertFalse(Files.exists(spool.resolve("gone.json")));
+    assertFalse(Files.exists(spool.resolve("gone.done")));
+    assertTrue(Files.exists(spool.resolve("gone.ignored")), "the mark the hook checks before it queues");
+    assertTrue(Files.exists(spool.resolve("kept.json")));
+    assertEquals(1, Main.run(delete), "there is nothing left to delete");
+  }
 }

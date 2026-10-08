@@ -120,6 +120,7 @@ public final class Main {
       case "import" -> main.importTranscripts();
       case "sessions" -> main.sessions();
       case "show" -> main.show();
+      case "delete" -> main.delete();
       default -> throw new UsageException("unknown command: " + args[0]);
     };
   }
@@ -294,6 +295,48 @@ public final class Main {
       }
     }
     return false;
+  }
+
+  /**
+   * Deletes recorded sessions, and keeps the hooks from recording them again: a session still open
+   * would otherwise be back, in part, at its next response.
+   */
+  private int delete() throws IOException {
+    if (positional.isEmpty()) {
+      throw new UsageException("delete needs at least one session id");
+    }
+    String accountId =
+        options.containsKey("account") ? options.get("account") : account(identity().path("account")).accountId();
+    int missing = 0;
+    try (FileChannel lockChannel = openLock();
+        FileLock lock = acquire(lockChannel)) {
+      if (lock == null) {
+        throw new IllegalStateException("another ccrec process is writing; try again");
+      }
+      try (RecordStore store = openStore()) {
+        for (String sessionId : positional) {
+          RecordStore.Deleted deleted = store.deleteSession(sessionId, accountId);
+          if (!deleted.anything()) {
+            missing++;
+            out.printf("%s  not recorded%n", sessionId);
+            continue;
+          }
+          if (sessionId.matches("[A-Za-z0-9_-]+")) {
+            Path spool = Files.createDirectories(home.resolve("spool"));
+            Files.deleteIfExists(spool.resolve(sessionId + ".json"));
+            Files.deleteIfExists(spool.resolve(sessionId + ".done"));
+            Path ignored = spool.resolve(sessionId + ".ignored");
+            if (!Files.exists(ignored)) {
+              Files.createFile(ignored);
+            }
+          }
+          out.printf(
+              "%s  deleted  records=%d  contents=%d  contents kept for other sessions=%d%n",
+              sessionId, deleted.messages(), deleted.contents(), deleted.sharedContents());
+        }
+      }
+    }
+    return missing == 0 ? 0 : 1;
   }
 
   private void report(Ingester.Summary summary) {

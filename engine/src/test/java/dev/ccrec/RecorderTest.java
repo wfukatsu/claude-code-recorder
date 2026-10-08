@@ -230,6 +230,92 @@ class RecorderTest {
   }
 
   @Test
+  void deletingASessionTakesItsContentButLeavesWhatAnotherSessionUses(@TempDir Path dir) throws IOException {
+    String other = "99999999-2222-3333-4444-555555555555";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, String.join("\n", SNAPSHOT, PROMPT, ANSWER, RESULT) + "\n");
+    Path subagents = Files.createDirectories(dir.resolve(SESSION).resolve("subagents"));
+    Files.writeString(subagents.resolve("agent-abc123.jsonl"), RESULT + "\n");
+    // Another session under the same system prompt, with a prompt of its own.
+    Path otherTranscript = dir.resolve(other + ".jsonl");
+    Files.writeString(otherTranscript, SNAPSHOT + "\n" + PROMPT.replace("日本語の質問です", "another question") + "\n");
+
+    try (RecordStore store = store(dir)) {
+      Ingester ingester = ingester(store, true);
+      ingester.ingestSession(transcript, SESSION, ALICE);
+      ingester.ingestSession(otherTranscript, other, ALICE);
+      List<MessageRecord> before = store.messages(SESSION);
+      String systemPrompt = before.get(0).contentHash();
+      String asked = before.get(2).contentHash();
+
+      RecordStore.Deleted deleted = store.deleteSession(SESSION, null);
+      assertTrue(deleted.session());
+      assertEquals(before.size(), deleted.messages());
+      assertEquals(2, deleted.sharedContents(), "the system prompt and the tool definitions");
+      assertEquals(before.stream().map(MessageRecord::contentHash).distinct().count() - 2, deleted.contents());
+
+      assertTrue(store.messages(SESSION).isEmpty());
+      assertTrue(store.content(asked).isEmpty(), "what only this session held is gone");
+      assertTrue(store.content(systemPrompt).isPresent(), "what the other session uses is not");
+      assertEquals(List.of(other), store.sessions("acct-alice", 10).stream().map(SessionRecord::sessionId).toList());
+      assertEquals(
+          List.of(other), store.sessionsByDay("org-1", 20261007, 10).stream().map(SessionRecord::sessionId).toList());
+      assertEquals(3, store.messages(other).size());
+
+      assertFalse(store.deleteSession(SESSION, "acct-alice").anything(), "deleting again finds nothing");
+      // Its files are forgotten as well: importing them records the session anew, sub-agent included.
+      assertEquals(5, ingester.ingestSession(transcript, SESSION, ALICE).lines());
+      assertEquals(before.size(), store.messages(SESSION).size());
+      assertTrue(store.content(asked).isPresent());
+    }
+  }
+
+  @Test
+  void aSessionStaysWithTheAccountThatFirstRecordedIt(@TempDir Path dir) throws IOException {
+    Account bob = new Account("acct-bob", "bob@example.com", "Bob", "org-1", "Example", "oauth");
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, PROMPT + "\n");
+
+    try (RecordStore store = store(dir)) {
+      ingester(store, true).ingestSession(transcript, SESSION, ALICE);
+      // The login has changed by the time the rest of the session is read.
+      Files.writeString(transcript, RESULT + "\n", StandardOpenOption.APPEND);
+      ingester(store, true).ingestSession(transcript, SESSION, bob);
+
+      assertEquals(2, store.messages(SESSION).size());
+      assertTrue(store.messages(SESSION).stream().allMatch(m -> m.accountId().equals("acct-alice")));
+      assertEquals(1, store.sessions("acct-alice", 10).size());
+      assertTrue(store.sessions("acct-bob", 10).isEmpty());
+    }
+  }
+
+  @Test
+  void deletingASessionFiledUnderTwoAccountsLeavesNoRowOfIt(@TempDir Path dir) {
+    // As a version that let an import re-file a session left it: one record and one row per account.
+    try (RecordStore store = store(dir)) {
+      for (String account : List.of("acct-alice", "acct-bob")) {
+        int line = account.equals("acct-alice") ? 1 : 2;
+        MessageRecord record =
+            new MessageRecord(
+                SESSION, "main", line, 0, account, "user_prompt", null, 1L, null, null, null, null, null, null,
+                ContentCodec.hash("hello"), 5, "hello", null, null, null, null);
+        store.writeBatch(
+            List.of(record),
+            java.util.Map.of(ContentCodec.hash("hello"), "hello"),
+            new dev.ccrec.model.IngestState("host-1", "hash-" + line, "/x/" + SESSION + ".jsonl", 1, line, null),
+            new SessionRecord(account, 1_000L, SESSION, "org-1", "host-1", null, null, null, null, null, null));
+      }
+      assertTrue(store.sessionAccount(SESSION).isPresent());
+
+      assertEquals(2, store.deleteSession(SESSION, null).messages());
+
+      assertTrue(store.sessions("acct-alice", 10).isEmpty());
+      assertTrue(store.sessions("acct-bob", 10).isEmpty());
+      assertTrue(store.sessionAccount(SESSION).isEmpty());
+    }
+  }
+
+  @Test
   void contentIsChunkedBelowTheSmallestBlobLimit() {
     StringBuilder text = new StringBuilder();
     java.util.Random random = new java.util.Random(7);

@@ -1,11 +1,14 @@
 package dev.ccrec.store;
 
+import com.scalar.db.api.Delete;
+import com.scalar.db.api.DistributedStorage;
 import com.scalar.db.api.DistributedTransaction;
 import com.scalar.db.api.DistributedTransactionAdmin;
 import com.scalar.db.api.DistributedTransactionManager;
 import com.scalar.db.api.Get;
 import com.scalar.db.api.Result;
 import com.scalar.db.api.Scan;
+import com.scalar.db.api.Scanner;
 import com.scalar.db.api.TableMetadata;
 import com.scalar.db.api.Upsert;
 import com.scalar.db.api.UpsertBuilder;
@@ -16,6 +19,7 @@ import com.scalar.db.exception.transaction.TransactionException;
 import com.scalar.db.exception.transaction.UnknownTransactionStatusException;
 import com.scalar.db.io.DataType;
 import com.scalar.db.io.Key;
+import com.scalar.db.service.StorageFactory;
 import com.scalar.db.service.TransactionFactory;
 import dev.ccrec.content.ContentCodec;
 import dev.ccrec.model.Account;
@@ -24,11 +28,15 @@ import dev.ccrec.model.MessageRecord;
 import dev.ccrec.model.SessionRecord;
 import java.time.Instant;
 import java.time.ZoneOffset;
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Properties;
+import java.util.Set;
 
 /**
  * {@link RecordStore} on ScalarDB Core (Community) with the Consensus Commit transaction manager.
@@ -49,10 +57,13 @@ public final class ScalarDbRecordStore implements RecordStore {
   static final String INGEST_STATE = "ingest_state";
 
   private static final int MAX_ATTEMPTS = 4;
+  private static final int DELETE_BATCH = 200;
 
+  private final Properties properties;
   private final DistributedTransactionManager manager;
 
   public ScalarDbRecordStore(Properties properties) {
+    this.properties = properties;
     TransactionFactory factory = TransactionFactory.create(properties);
     createSchema(factory);
     this.manager = factory.getTransactionManager();
@@ -388,6 +399,24 @@ public final class ScalarDbRecordStore implements RecordStore {
   }
 
   @Override
+  public Optional<String> sessionAccount(String sessionId) {
+    return read(
+        tx ->
+            tx
+                .scan(
+                    Scan.newBuilder()
+                        .namespace(NS)
+                        .table(MESSAGES)
+                        .partitionKey(Key.ofText("session_id", sessionId))
+                        .projection("account_id")
+                        .limit(1)
+                        .build())
+                .stream()
+                .findFirst()
+                .map(r -> r.getText("account_id")));
+  }
+
+  @Override
   public List<SessionRecord> sessions(String accountId, int limit) {
     return read(
         tx -> {
@@ -517,6 +546,204 @@ public final class ScalarDbRecordStore implements RecordStore {
           }
           return Optional.of(ContentCodec.decode(chunks));
         });
+  }
+
+  @Override
+  public Deleted deleteSession(String sessionId, String accountId) {
+    List<Key> records = new ArrayList<>();
+    Set<String> hashes = new LinkedHashSet<>();
+    // Records of one session can name more than one account, each with a session row of its own.
+    Set<String> accounts = new LinkedHashSet<>();
+    if (accountId != null) {
+      accounts.add(accountId);
+    }
+    read(
+        tx -> {
+          records.clear();
+          for (Result r :
+              tx.scan(
+                  Scan.newBuilder()
+                      .namespace(NS)
+                      .table(MESSAGES)
+                      .partitionKey(Key.ofText("session_id", sessionId))
+                      .projections("agent_id", "line_no", "block_no", "account_id", "content_hash")
+                      .build())) {
+            records.add(
+                Key.newBuilder()
+                    .addText("agent_id", r.getText("agent_id"))
+                    .addInt("line_no", r.getInt("line_no"))
+                    .addInt("block_no", r.getInt("block_no"))
+                    .build());
+            accounts.add(r.getText("account_id"));
+            if (r.getText("content_hash") != null) {
+              hashes.add(r.getText("content_hash"));
+            }
+          }
+          return null;
+        });
+
+    // Content first: once the records are gone, nothing says which content was this session's alone.
+    Set<String> shared = usedByAnotherSession(hashes, sessionId);
+    List<String> orphans = hashes.stream().filter(hash -> !shared.contains(hash)).toList();
+    for (List<String> batch : batches(orphans, 20)) {
+      write(
+          tx -> {
+            for (String hash : batch) {
+              Key partition = Key.ofText("content_hash", hash);
+              for (Result chunk :
+                  tx.scan(
+                      Scan.newBuilder()
+                          .namespace(NS)
+                          .table(CONTENTS)
+                          .partitionKey(partition)
+                          .projection("chunk_no")
+                          .build())) {
+                tx.delete(
+                    Delete.newBuilder()
+                        .namespace(NS)
+                        .table(CONTENTS)
+                        .partitionKey(partition)
+                        .clusteringKey(Key.ofInt("chunk_no", chunk.getInt("chunk_no")))
+                        .build());
+              }
+            }
+          });
+    }
+
+    boolean session = false;
+    for (String account : accounts) {
+      session |= read(tx -> deleteSessionRows(tx, account, sessionId));
+    }
+    for (List<Key> batch : batches(records, DELETE_BATCH)) {
+      write(
+          tx -> {
+            for (Key record : batch) {
+              tx.delete(
+                  Delete.newBuilder()
+                      .namespace(NS)
+                      .table(MESSAGES)
+                      .partitionKey(Key.ofText("session_id", sessionId))
+                      .clusteringKey(record)
+                      .build());
+            }
+          });
+    }
+    return new Deleted(session, records.size(), orphans.size(), shared.size());
+  }
+
+  /** The session row, its by-day index row and the ingest positions of its files. */
+  private static boolean deleteSessionRows(DistributedTransaction tx, String accountId, String sessionId)
+      throws TransactionException {
+    boolean found = false;
+    for (Result r :
+        tx.scan(
+            Scan.newBuilder()
+                .namespace(NS)
+                .table(SESSIONS)
+                .partitionKey(Key.ofText("account_id", accountId))
+                .projections("started_at", "session_id", "org_id", "host_id")
+                .build())) {
+      if (!sessionId.equals(r.getText("session_id"))) {
+        continue;
+      }
+      found = true;
+      Key startedAndId =
+          Key.newBuilder()
+              .addBigInt("started_at", r.getBigInt("started_at"))
+              .addText("session_id", sessionId)
+              .build();
+      tx.delete(
+          Delete.newBuilder()
+              .namespace(NS)
+              .table(SESSIONS)
+              .partitionKey(Key.ofText("account_id", accountId))
+              .clusteringKey(startedAndId)
+              .build());
+      tx.delete(
+          Delete.newBuilder()
+              .namespace(NS)
+              .table(SESSIONS_BY_DAY)
+              .partitionKey(
+                  Key.newBuilder()
+                      .addText("org_id", r.getText("org_id"))
+                      .addInt("day", utcDay(r.getBigInt("started_at")))
+                      .build())
+              .clusteringKey(startedAndId)
+              .build());
+      if (r.getText("host_id") != null) {
+        deleteIngestStates(tx, r.getText("host_id"), sessionId);
+      }
+    }
+    return found;
+  }
+
+  /**
+   * Forgets how far the session's files were read, so importing them again records them again. They
+   * are known by their place: {@code <session>.jsonl} and {@code <session>/subagents/*}.
+   */
+  private static void deleteIngestStates(DistributedTransaction tx, String hostId, String sessionId)
+      throws TransactionException {
+    for (Result r :
+        tx.scan(
+            Scan.newBuilder()
+                .namespace(NS)
+                .table(INGEST_STATE)
+                .partitionKey(Key.ofText("host_id", hostId))
+                .projections("source_path_hash", "source_path")
+                .build())) {
+      String path = String.valueOf(r.getText("source_path")).replace('\\', '/');
+      if (path.endsWith("/" + sessionId + ".jsonl") || path.contains("/" + sessionId + "/subagents/")) {
+        tx.delete(
+            Delete.newBuilder()
+                .namespace(NS)
+                .table(INGEST_STATE)
+                .partitionKey(Key.ofText("host_id", hostId))
+                .clusteringKey(Key.ofText("source_path_hash", r.getText("source_path_hash")))
+                .build());
+      }
+    }
+  }
+
+  /**
+   * Which of these contents a record of another session refers to. Nothing indexes records by
+   * content, so this reads every record once — outside a transaction, which would hold all it reads
+   * in memory. A record another process is writing at this moment is seen too, which errs on the
+   * side of keeping its content.
+   */
+  private Set<String> usedByAnotherSession(Set<String> hashes, String sessionId) {
+    Set<String> used = new HashSet<>();
+    if (hashes.isEmpty()) {
+      return used;
+    }
+    DistributedStorage storage = StorageFactory.create(properties).getStorage();
+    try (Scanner scanner =
+        storage.scan(
+            Scan.newBuilder()
+                .namespace(NS)
+                .table(MESSAGES)
+                .all()
+                .projections("session_id", "content_hash")
+                .build())) {
+      for (Result r : scanner) {
+        String hash = r.getText("content_hash");
+        if (hash != null && hashes.contains(hash) && !sessionId.equals(r.getText("session_id"))) {
+          used.add(hash);
+        }
+      }
+    } catch (ExecutionException | IOException e) {
+      throw new StoreException("could not tell which contents other sessions use", e);
+    } finally {
+      storage.close();
+    }
+    return used;
+  }
+
+  private static <T> List<List<T>> batches(List<T> items, int size) {
+    List<List<T>> batches = new ArrayList<>();
+    for (int from = 0; from < items.size(); from += size) {
+      batches.add(items.subList(from, Math.min(from + size, items.size())));
+    }
+    return batches;
   }
 
   @Override

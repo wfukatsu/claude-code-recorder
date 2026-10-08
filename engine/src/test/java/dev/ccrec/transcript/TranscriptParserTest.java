@@ -25,6 +25,9 @@ class TranscriptParserTest {
     assertEquals("turn_duration", block.subtype());
     assertEquals(duration, block.text());
 
+    String empty = "{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"content\":\"\",\"level\":\"info\"}";
+    assertEquals(empty, only(empty).text(), "an empty content says nothing either");
+
     Block notice = only("{\"type\":\"system\",\"subtype\":\"away_summary\",\"content\":\"while you were away\"}");
     assertEquals("while you were away", notice.text(), "content, where there is some, is the text");
   }
