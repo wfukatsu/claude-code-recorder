@@ -61,8 +61,10 @@ public interface RecordStore extends AutoCloseable {
    *
    * @param accountId where else to look for the session row, besides the accounts its records name;
    *     may be null
+   * @param hostId where else to look for the ingest positions, besides the host the session row
+   *     names; may be null
    */
-  Deleted deleteSession(String sessionId, String accountId);
+  Deleted deleteSession(String sessionId, String accountId, String hostId);
 
   @Override
   void close();

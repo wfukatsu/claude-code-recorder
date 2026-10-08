@@ -22,10 +22,10 @@ import java.nio.channels.FileLock;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -189,19 +189,30 @@ public final class Main {
       return;
     }
     Path transcript = Path.of(queued.path("transcript_path").asText(""));
-    if (Files.isRegularFile(transcript)) {
-      Ingester ingester = ingester(store, queued.path("host_id").asText("unknown-host"));
-      report(ingester.ingestSession(transcript, sessionId, account(queued.path("account"))));
+    if (!Files.isRegularFile(transcript)) {
+      if (!waiting(queued, done)) {
+        // A session that has only started may have no transcript yet.
+        return;
+      }
+      if (Files.getLastModifiedTime(entry).toInstant().isBefore(started.minus(QUEUE_RETENTION))) {
+        out.printf("%s  dropped from the queue: its transcript %s never appeared%n", sessionId, transcript);
+        Files.deleteIfExists(entry);
+        Files.deleteIfExists(done);
+        return;
+      }
+      // Asked for and not there: it stays waiting, where `ccrec doctor` shows it, rather than pass
+      // for recorded.
+      throw new NoSuchFileException(transcript.toString(), null, "the transcript to record is not there");
     }
+    Ingester ingester = ingester(store, queued.path("host_id").asText("unknown-host"));
+    report(ingester.ingestSession(transcript, sessionId, account(queued.path("account"))));
     if (queued.path("ended").asBoolean(false)) {
       Files.deleteIfExists(entry);
       Files.deleteIfExists(done);
     } else {
-      // The mark of success `ccrec doctor` and the next run compare the hook's requests against.
-      if (!Files.exists(done)) {
-        Files.createFile(done);
-      }
-      Files.setLastModifiedTime(done, FileTime.from(started));
+      // The mark of success `ccrec doctor` and the next run compare the hook's requests against. The
+      // time is written into it: a file system may keep modification times to the second only.
+      Files.writeString(done, started.toString());
     }
   }
 
@@ -215,9 +226,18 @@ public final class Main {
       return true;
     }
     try {
-      return Instant.parse(requested).isAfter(Files.getLastModifiedTime(done).toInstant());
+      return Instant.parse(requested).isAfter(recordedAt(done));
     } catch (DateTimeParseException e) {
       return true;
+    }
+  }
+
+  /** When the ingest that left this mark started; a mark left by an earlier version says it by its age alone. */
+  private static Instant recordedAt(Path done) throws IOException {
+    try {
+      return Instant.parse(Files.readString(done).strip());
+    } catch (DateTimeParseException e) {
+      return Files.getLastModifiedTime(done).toInstant();
     }
   }
 
@@ -307,6 +327,8 @@ public final class Main {
     }
     String accountId =
         options.containsKey("account") ? options.get("account") : account(identity().path("account")).accountId();
+    // Where this machine's ingest positions are, for a session that has no row to say.
+    String hostId = System.getenv("CCREC_IDENTITY_JSON") == null ? null : text(identity(), "host_id");
     int missing = 0;
     try (FileChannel lockChannel = openLock();
         FileLock lock = acquire(lockChannel)) {
@@ -315,7 +337,7 @@ public final class Main {
       }
       try (RecordStore store = openStore()) {
         for (String sessionId : positional) {
-          RecordStore.Deleted deleted = store.deleteSession(sessionId, accountId);
+          RecordStore.Deleted deleted = store.deleteSession(sessionId, accountId, hostId);
           if (!deleted.anything()) {
             missing++;
             out.printf("%s  not recorded%n", sessionId);

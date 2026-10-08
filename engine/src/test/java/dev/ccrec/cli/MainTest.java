@@ -138,4 +138,43 @@ class MainTest {
     assertTrue(Files.exists(spool.resolve("kept.json")));
     assertEquals(1, Main.run(delete), "there is nothing left to delete");
   }
+
+  @Test
+  void aSessionWhoseTranscriptIsNotThereDoesNotPassForRecorded(@TempDir Path dir) throws IOException {
+    Path home = home(dir);
+    Path spool = home.resolve("spool");
+    String now = Instant.now().toString();
+    queue(home, "moved", dir.resolve("moved.jsonl"), true, now);
+    // Only started: its transcript may simply not have been written yet.
+    queue(home, "fresh", dir.resolve("fresh.jsonl"), false, null);
+    queue(home, "lost", dir.resolve("lost.jsonl"), false, now);
+    Files.setLastModifiedTime(spool.resolve("lost.json"), FileTime.from(Instant.now().minus(Duration.ofDays(31))));
+
+    assertEquals(1, Main.run(new String[] {"ingest", "--home", home.toString()}));
+
+    assertTrue(Files.exists(spool.resolve("moved.json")), "it stays waiting");
+    assertFalse(Files.exists(spool.resolve("moved.done")));
+    assertTrue(Files.exists(spool.resolve("fresh.json")));
+    assertFalse(Files.exists(spool.resolve("lost.json")), "but not for ever");
+
+    // The transcript turns up after all.
+    transcript(dir, "moved");
+    assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
+    assertEquals(List.of("moved"), sessions(home).stream().map(SessionRecord::sessionId).toList());
+  }
+
+  @Test
+  void theMarkOfARecordedSessionSaysWhenItWasRecorded(@TempDir Path dir) throws IOException {
+    Path home = home(dir);
+    Path mark = home.resolve("spool").resolve("open.done");
+    Instant before = Instant.now();
+    queue(home, "open", transcript(dir, "open"), false, before.toString());
+    assertEquals(0, Main.run(new String[] {"ingest", "--session", "other", "--home", home.toString()}));
+
+    assertFalse(Instant.parse(Files.readString(mark)).isBefore(before));
+    // Whatever the file system does to the mark's modification time, the session is not waiting again.
+    Files.setLastModifiedTime(mark, FileTime.from(before.minus(Duration.ofHours(1))));
+    Files.delete(dir.resolve("open.jsonl"));
+    assertEquals(0, Main.run(new String[] {"ingest", "--session", "other", "--home", home.toString()}));
+  }
 }

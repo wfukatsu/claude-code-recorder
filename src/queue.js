@@ -30,7 +30,10 @@ export function queueStatus(home) {
     if (Number.isNaN(requested)) continue;
     let done = -Infinity;
     try {
-      done = fs.statSync(path.join(spool, name.replace(/\.json$/, '.done'))).mtimeMs;
+      // The engine writes the time into the mark; one left by an earlier version says it by its age alone.
+      const mark = path.join(spool, name.replace(/\.json$/, '.done'));
+      done = Date.parse(fs.readFileSync(mark, 'utf8').trim());
+      if (Number.isNaN(done)) done = fs.statSync(mark).mtimeMs;
     } catch {
       // Never ingested.
     }

@@ -549,7 +549,7 @@ public final class ScalarDbRecordStore implements RecordStore {
   }
 
   @Override
-  public Deleted deleteSession(String sessionId, String accountId) {
+  public Deleted deleteSession(String sessionId, String accountId, String hostId) {
     List<Key> records = new ArrayList<>();
     Set<String> hashes = new LinkedHashSet<>();
     // Records of one session can name more than one account, each with a session row of its own.
@@ -611,8 +611,15 @@ public final class ScalarDbRecordStore implements RecordStore {
     }
 
     boolean session = false;
+    Set<String> hosts = new LinkedHashSet<>();
+    if (hostId != null && !hostId.isBlank()) {
+      hosts.add(Account.keySafe(hostId));
+    }
     for (String account : accounts) {
-      session |= read(tx -> deleteSessionRows(tx, account, sessionId));
+      session |= read(tx -> deleteSessionRows(tx, account, sessionId, hosts));
+    }
+    for (String host : hosts) {
+      write(tx -> deleteIngestStates(tx, host, sessionId));
     }
     for (List<Key> batch : batches(records, DELETE_BATCH)) {
       write(
@@ -631,8 +638,9 @@ public final class ScalarDbRecordStore implements RecordStore {
     return new Deleted(session, records.size(), orphans.size(), shared.size());
   }
 
-  /** The session row, its by-day index row and the ingest positions of its files. */
-  private static boolean deleteSessionRows(DistributedTransaction tx, String accountId, String sessionId)
+  /** The session row and its by-day index row. The host a row names is added to {@code hosts}. */
+  private static boolean deleteSessionRows(
+      DistributedTransaction tx, String accountId, String sessionId, Set<String> hosts)
       throws TransactionException {
     boolean found = false;
     for (Result r :
@@ -671,7 +679,7 @@ public final class ScalarDbRecordStore implements RecordStore {
               .clusteringKey(startedAndId)
               .build());
       if (r.getText("host_id") != null) {
-        deleteIngestStates(tx, r.getText("host_id"), sessionId);
+        hosts.add(r.getText("host_id"));
       }
     }
     return found;

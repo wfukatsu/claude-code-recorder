@@ -163,6 +163,13 @@ test('a session waits in the queue from the hook that asks for it until an inges
     await runHook(event('sess-a', 'SessionStart'));
     assert.equal(queueStatus(home).waiting, 1);
 
+    // The time the engine writes into the mark counts, not what the file system makes of its age.
+    fs.writeFileSync(path.join(spool, 'sess-b.done'), new Date(Date.now() + 1000).toISOString());
+    fs.utimesSync(path.join(spool, 'sess-b.done'), new Date(0), new Date(0));
+    assert.equal(queueStatus(home).waiting, 0);
+    fs.writeFileSync(path.join(spool, 'sess-b.done'), new Date(0).toISOString());
+    assert.equal(queueStatus(home).waiting, 1);
+
     fs.writeFileSync(path.join(spool, 'broken.json'), '{broken');
     fs.writeFileSync(path.join(spool, 'older.json.bad'), '{broken');
     assert.equal(queueStatus(home).unreadable, 2);
@@ -188,4 +195,19 @@ test('installing hooks is repeatable and leaves other settings alone', () => {
   const after = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.deepEqual(after.hooks, { Stop: [other], PreToolUse: [other] });
   assert.equal(hooksInstalled(file), false);
+});
+
+test('installing hooks keeps a symlinked settings file a symlink, with its mode', () => {
+  const dir = scratch();
+  const real = path.join(dir, 'dotfiles', 'settings.json');
+  const link = path.join(dir, 'settings.json');
+  fs.mkdirSync(path.dirname(real));
+  fs.writeFileSync(real, JSON.stringify({ model: 'opus' }), { mode: 0o600 });
+  fs.symlinkSync(real, link);
+
+  installHooks(link, '"/usr/bin/node" "/opt/ccrec/bin/ccrec.js" hook');
+  assert.ok(fs.lstatSync(link).isSymbolicLink());
+  assert.equal(hooksInstalled(real), true);
+  assert.equal(fs.statSync(real).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(path.dirname(real)), ['settings.json'], 'no temporary file is left');
 });

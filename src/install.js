@@ -39,8 +39,20 @@ function save(file, settings, before) {
   if (before !== null && !fs.existsSync(`${file}.ccrec-bak`)) {
     fs.writeFileSync(`${file}.ccrec-bak`, before);
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  // Written beside the file and moved over it, so that a crash leaves Claude Code's settings either
+  // as they were or as they should be. A symlinked settings file (a dotfiles checkout) stays one.
+  const target = before === null ? file : fs.realpathSync(file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = `${target}.${process.pid}.tmp`;
+  const mode = before === null ? 0o644 : fs.statSync(target).mode & 0o777;
+  try {
+    fs.writeFileSync(temporary, JSON.stringify(settings, null, 2) + '\n', { mode });
+    fs.chmodSync(temporary, mode);
+    fs.renameSync(temporary, target);
+  } catch (error) {
+    fs.rmSync(temporary, { force: true });
+    throw error;
+  }
 }
 
 /** Adds the recorder's hooks, leaving every other hook and setting as it was. Safe to repeat. */

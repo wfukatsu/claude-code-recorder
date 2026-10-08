@@ -248,7 +248,7 @@ class RecorderTest {
       String systemPrompt = before.get(0).contentHash();
       String asked = before.get(2).contentHash();
 
-      RecordStore.Deleted deleted = store.deleteSession(SESSION, null);
+      RecordStore.Deleted deleted = store.deleteSession(SESSION, null, null);
       assertTrue(deleted.session());
       assertEquals(before.size(), deleted.messages());
       assertEquals(2, deleted.sharedContents(), "the system prompt and the tool definitions");
@@ -262,7 +262,7 @@ class RecorderTest {
           List.of(other), store.sessionsByDay("org-1", 20261007, 10).stream().map(SessionRecord::sessionId).toList());
       assertEquals(3, store.messages(other).size());
 
-      assertFalse(store.deleteSession(SESSION, "acct-alice").anything(), "deleting again finds nothing");
+      assertFalse(store.deleteSession(SESSION, "acct-alice", null).anything(), "deleting again finds nothing");
       // Its files are forgotten as well: importing them records the session anew, sub-agent included.
       assertEquals(5, ingester.ingestSession(transcript, SESSION, ALICE).lines());
       assertEquals(before.size(), store.messages(SESSION).size());
@@ -307,11 +307,29 @@ class RecorderTest {
       }
       assertTrue(store.sessionAccount(SESSION).isPresent());
 
-      assertEquals(2, store.deleteSession(SESSION, null).messages());
+      assertEquals(2, store.deleteSession(SESSION, null, null).messages());
 
       assertTrue(store.sessions("acct-alice", 10).isEmpty());
       assertTrue(store.sessions("acct-bob", 10).isEmpty());
       assertTrue(store.sessionAccount(SESSION).isEmpty());
+    }
+  }
+
+  @Test
+  void deletingASessionThatHasNoRowStillForgetsItsFiles(@TempDir Path dir) throws IOException {
+    // No line carries a timestamp, so there is nothing to key a session row by.
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hello\"}}\n");
+
+    try (RecordStore store = store(dir)) {
+      Ingester ingester = ingester(store, true);
+      assertEquals(1, ingester.ingestSession(transcript, SESSION, ALICE).messages());
+      assertTrue(store.sessions("acct-alice", 10).isEmpty());
+
+      RecordStore.Deleted deleted = store.deleteSession(SESSION, null, "host-1");
+      assertFalse(deleted.session());
+      assertEquals(1, deleted.messages());
+      assertEquals(1, ingester.ingestSession(transcript, SESSION, ALICE).messages(), "an import records it anew");
     }
   }
 
