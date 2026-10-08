@@ -245,6 +245,8 @@ test('an event asks for an ingest only when the transcripts were written to sinc
     fs.writeFileSync(path.join(subagents, 'agent-a1.jsonl'), '{}\n');
     at(path.join(subagents, 'agent-a1.jsonl'), recorded + 2000.5);
     assert.equal(writtenSince(transcript, 'sess-q', recorded), true);
+    // A request is told from the one before by its time, to the millisecond.
+    await new Promise((resolve) => setTimeout(resolve, 5));
     await runHook(event('SubagentStop'));
     assert.notEqual(requested(), first);
 
