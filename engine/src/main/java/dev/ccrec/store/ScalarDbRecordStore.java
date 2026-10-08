@@ -58,6 +58,7 @@ public final class ScalarDbRecordStore implements RecordStore {
   static final String CONTENTS = "contents";
   static final String INGEST_STATE = "ingest_state";
   static final String SESSION_USAGE = "session_usage";
+  static final String SESSIONS_BY_ID = "sessions_by_id";
 
   /** The row of {@code session_usage} that says the sessions recorded before it existed are in it. */
   private static final String USAGE_BUILT = "_usage_built";
@@ -240,6 +241,16 @@ public final class ScalarDbRecordStore implements RecordStore {
           true);
       admin.createTable(
           NS,
+          SESSIONS_BY_ID,
+          TableMetadata.newBuilder()
+              .addColumn("session_id", DataType.TEXT)
+              .addColumn("account_id", DataType.TEXT)
+              .addColumn("started_at", DataType.BIGINT)
+              .addPartitionKey("session_id")
+              .build(),
+          true);
+      admin.createTable(
+          NS,
           SESSION_USAGE,
           TableMetadata.newBuilder()
               .addColumn("session_id", DataType.TEXT)
@@ -341,6 +352,15 @@ public final class ScalarDbRecordStore implements RecordStore {
             .textValue("account_id", session.accountId());
     text(byDay, "project_path", session.projectPath());
     tx.upsert(byDay.build());
+
+    tx.upsert(
+        Upsert.newBuilder()
+            .namespace(NS)
+            .table(SESSIONS_BY_ID)
+            .partitionKey(Key.ofText("session_id", session.sessionId()))
+            .textValue("account_id", session.accountId())
+            .bigIntValue("started_at", session.startedAt())
+            .build());
   }
 
   @Override
@@ -505,7 +525,7 @@ public final class ScalarDbRecordStore implements RecordStore {
   }
 
   @Override
-  public boolean buildUsageIfMissing() {
+  public boolean usageBuilt() {
     Get built =
         Get.newBuilder()
             .namespace(NS)
@@ -513,7 +533,12 @@ public final class ScalarDbRecordStore implements RecordStore {
             .partitionKey(Key.ofText("session_id", USAGE_BUILT))
             .clusteringKey(Key.ofText("model", USAGE_BUILT))
             .build();
-    if (read(tx -> tx.get(built).isPresent())) {
+    return read(tx -> tx.get(built).isPresent());
+  }
+
+  @Override
+  public boolean buildUsageIfMissing() {
+    if (usageBuilt()) {
       return false;
     }
     // Every record is read once, outside a transaction, as when deleting: see usedByAnotherSession.
@@ -696,39 +721,72 @@ public final class ScalarDbRecordStore implements RecordStore {
                       .partitionKey(Key.ofText("account_id", accountId))
                       .limit(limit)
                       .build())) {
-            sessions.add(
-                new SessionRecord(
-                    r.getText("account_id"),
-                    r.getBigInt("started_at"),
-                    r.getText("session_id"),
-                    r.getText("org_id"),
-                    r.getText("host_id"),
-                    r.getText("project_path"),
-                    r.getText("git_branch"),
-                    r.getText("cc_version"),
-                    r.getText("model"),
-                    r.getText("title"),
-                    nullableBigInt(r, "ended_at"),
-                    r.getText("entrypoint"),
-                    r.isNull("cost_usd") ? null : r.getDouble("cost_usd"),
-                    nullableBigInt(r, "api_duration_ms"),
-                    nullableBigInt(r, "tool_duration_ms"),
-                    nullableBigInt(r, "lines_added"),
-                    nullableBigInt(r, "lines_removed")));
+            sessions.add(sessionOf(r));
           }
           return sessions;
         });
   }
 
+  private static SessionRecord sessionOf(Result r) {
+    return new SessionRecord(
+        r.getText("account_id"),
+        r.getBigInt("started_at"),
+        r.getText("session_id"),
+        r.getText("org_id"),
+        r.getText("host_id"),
+        r.getText("project_path"),
+        r.getText("git_branch"),
+        r.getText("cc_version"),
+        r.getText("model"),
+        r.getText("title"),
+        nullableBigInt(r, "ended_at"),
+        r.getText("entrypoint"),
+        r.isNull("cost_usd") ? null : r.getDouble("cost_usd"),
+        nullableBigInt(r, "api_duration_ms"),
+        nullableBigInt(r, "tool_duration_ms"),
+        nullableBigInt(r, "lines_added"),
+        nullableBigInt(r, "lines_removed"));
+  }
+
   @Override
   public Optional<SessionRecord> session(String sessionId, String accountId) {
-    // The row is keyed by when the session started, which only the row itself says.
+    Optional<SessionRecord> indexed =
+        read(
+            tx -> {
+              Optional<Result> where =
+                  tx.get(
+                      Get.newBuilder()
+                          .namespace(NS)
+                          .table(SESSIONS_BY_ID)
+                          .partitionKey(Key.ofText("session_id", sessionId))
+                          .build());
+              if (where.isEmpty()) {
+                return Optional.<SessionRecord>empty();
+              }
+              return tx.get(
+                      Get.newBuilder()
+                          .namespace(NS)
+                          .table(SESSIONS)
+                          .partitionKey(Key.ofText("account_id", where.get().getText("account_id")))
+                          .clusteringKey(
+                              Key.newBuilder()
+                                  .addBigInt("started_at", where.get().getBigInt("started_at"))
+                                  .addText("session_id", sessionId)
+                                  .build())
+                          .build())
+                  .map(ScalarDbRecordStore::sessionOf);
+            });
+    if (indexed.isPresent()) {
+      return indexed;
+    }
+    // A session recorded before sessions were indexed by id: its row is keyed by when it started,
+    // which only the row itself says, so the accounts it can be under are read through.
     for (String account : new LinkedHashSet<>(java.util.Arrays.asList(sessionAccount(sessionId).orElse(null), accountId))) {
       if (account == null) {
         continue;
       }
       Optional<SessionRecord> found =
-          sessions(account, Integer.MAX_VALUE).stream().filter(s -> s.sessionId().equals(sessionId)).findFirst();
+          sessions(account, Integer.MAX_VALUE).stream().filter(x -> x.sessionId().equals(sessionId)).findFirst();
       if (found.isPresent()) {
         return found;
       }
@@ -922,6 +980,14 @@ public final class ScalarDbRecordStore implements RecordStore {
     for (String host : hosts) {
       write(tx -> deleteIngestStates(tx, host, sessionId));
     }
+    write(
+        tx ->
+            tx.delete(
+                Delete.newBuilder()
+                    .namespace(NS)
+                    .table(SESSIONS_BY_ID)
+                    .partitionKey(Key.ofText("session_id", sessionId))
+                    .build()));
     write(
         tx -> {
           Key partition = Key.ofText("session_id", sessionId);

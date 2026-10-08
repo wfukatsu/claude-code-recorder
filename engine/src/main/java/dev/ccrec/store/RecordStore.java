@@ -68,6 +68,9 @@ public interface RecordStore extends AutoCloseable {
    */
   boolean buildUsageIfMissing();
 
+  /** Whether {@link #buildUsageIfMissing} has run, so that a reader can tell without writing. */
+  boolean usageBuilt();
+
   /** What {@link #deleteSession} removed; {@code sharedContents} were kept for the sessions that still use them. */
   record Deleted(boolean session, int messages, int contents, int sharedContents) {
     public boolean anything() {

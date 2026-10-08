@@ -233,6 +233,7 @@ public final class TranscriptParser {
   private static void userAttributes(JsonNode node, ObjectNode attributes) {
     put(attributes, "permission_mode", node.path("permissionMode"));
     put(attributes, "prompt_source", node.path("promptSource"));
+    put(attributes, "origin", node.path("origin").path("kind"));
     put(attributes, "tool_denial", node.path("toolDenialKind"));
     flag(attributes, "interrupted", node.path("interruptedMessageId").isTextual());
     flag(attributes, "compact_summary", node.path("isCompactSummary").asBoolean(false));

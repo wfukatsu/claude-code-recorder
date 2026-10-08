@@ -52,6 +52,8 @@ public final class Main {
       DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm").withZone(ZoneId.systemDefault());
   private static final long LOCK_WAIT_MILLIS = 60_000;
   private static final Duration QUEUE_RETENTION = Duration.ofDays(30);
+  /** The sources of a prompt somebody, or a program driving Claude Code, sent. */
+  private static final Set<String> PROMPTED = Set.of("typed", "suggestion_accepted", "queued", "sdk");
 
   private final Path home;
   private final Path config;
@@ -434,10 +436,17 @@ public final class Main {
   private int usage() throws IOException {
     List<UsageRecord> rows = new ArrayList<>();
     int sessions;
-    // The sums of sessions recorded by an earlier version are made on first use, which is a write.
-    try (FileChannel lockChannel = openLock();
-        FileLock lock = acquire(lockChannel);
-        RecordStore store = lock == null ? openStore() : openStoreForWriting()) {
+    try (RecordStore store = openStore()) {
+      if (!store.usageBuilt()) {
+        // The sums of sessions recorded by an earlier version are made on first use, which is a
+        // write: it waits its turn. Once made, reading them waits for nobody.
+        try (FileChannel lockChannel = openLock();
+            FileLock lock = acquire(lockChannel)) {
+          if (lock != null) {
+            store.buildUsageIfMissing();
+          }
+        }
+      }
       if (!positional.isEmpty()) {
         sessions = positional.size();
         for (String sessionId : positional) {
@@ -529,29 +538,30 @@ public final class Main {
     }
 
     ObjectNode summary = JSON.createObjectNode();
-    summary.put("session_id", sessionId);
+    summary.put("sessionId", sessionId);
     session.ifPresent(
         s -> {
-          summary.put("account_id", s.accountId());
-          putText(summary, "project_path", s.projectPath());
-          putText(summary, "git_branch", s.gitBranch());
+          summary.put("accountId", s.accountId());
+          putText(summary, "projectPath", s.projectPath());
+          putText(summary, "gitBranch", s.gitBranch());
           putText(summary, "entrypoint", s.entrypoint());
-          putText(summary, "cc_version", s.ccVersion());
-          summary.put("started_at", Instant.ofEpochMilli(s.startedAt()).toString());
+          putText(summary, "ccVersion", s.ccVersion());
+          summary.put("startedAt", Instant.ofEpochMilli(s.startedAt()).toString());
           if (s.endedAt() != null) {
-            summary.put("last_activity_at", Instant.ofEpochMilli(s.endedAt()).toString());
+            summary.put("lastActivityAt", Instant.ofEpochMilli(s.endedAt()).toString());
           }
           putText(summary, "title", s.title());
           if (s.costUsd() != null) {
-            summary.put("cost_usd", s.costUsd());
+            summary.put("costUsd", s.costUsd());
           }
-          putNumber(summary, "api_duration_ms", s.apiDurationMs());
-          putNumber(summary, "tool_duration_ms", s.toolDurationMs());
-          putNumber(summary, "lines_added", s.linesAdded());
-          putNumber(summary, "lines_removed", s.linesRemoved());
+          putNumber(summary, "apiDurationMs", s.apiDurationMs());
+          putNumber(summary, "toolDurationMs", s.toolDurationMs());
+          putNumber(summary, "linesAdded", s.linesAdded());
+          putNumber(summary, "linesRemoved", s.linesRemoved());
         });
 
     long prompts = 0;
+    Map<String, Long> promptSources = new java.util.TreeMap<>();
     long turns = 0;
     long turnMillis = 0;
     long longestTurnMillis = 0;
@@ -576,7 +586,20 @@ public final class Main {
         agents.add(m.agentId());
       }
       switch (m.kind()) {
-        case "user_prompt" -> prompts += MessageRecord.MAIN_AGENT.equals(m.agentId()) ? 1 : 0;
+        case "user_prompt" -> {
+          // The main thread's prompts by where they came from; Claude Code writes some itself (a
+          // background task's notification, the summary after a compaction), and those are not
+          // somebody's prompt.
+          JsonNode prompt = attributes(m);
+          if (MessageRecord.MAIN_AGENT.equals(m.agentId())) {
+            String source =
+                prompt.path("compact_summary").asBoolean(false)
+                    ? "compact_summary"
+                    : prompt.path("prompt_source").asText(prompt.path("origin").asText("unlabelled"));
+            promptSources.merge(source, 1L, Long::sum);
+            prompts += PROMPTED.contains(source) || "human".equals(prompt.path("origin").asText()) ? 1 : 0;
+          }
+        }
         case "tool_use" -> {
           String tool = m.toolName() != null ? m.toolName() : "unknown";
           tools.computeIfAbsent(tool, k -> new long[2])[0]++;
@@ -626,26 +649,27 @@ public final class Main {
     }
     summary.put("records", messages.size());
     summary.put("prompts", prompts);
-    summary.put("sub_agents", agents.size());
+    summary.set("promptSources", JSON.valueToTree(promptSources));
+    summary.put("subAgents", agents.size());
     summary.put("turns", turns);
-    summary.put("turn_duration_ms", turnMillis);
-    summary.put("longest_turn_ms", longestTurnMillis);
-    summary.put("thinking_duration_ms", thinkingMillis);
+    summary.put("turnDurationMs", turnMillis);
+    summary.put("longestTurnMs", longestTurnMillis);
+    summary.put("thinkingDurationMs", thinkingMillis);
     summary.put("compactions", compactions);
     summary.put("interrupted", interrupted);
-    summary.put("hook_errors", hookErrors);
-    summary.put("files_edited", files.size());
+    summary.put("hookErrors", hookErrors);
+    summary.put("filesEdited", files.size());
     Map<String, Long> stopCounts = new java.util.TreeMap<>();
     stops.values().forEach(reason -> stopCounts.merge(reason, 1L, Long::sum));
-    summary.set("stop_reasons", JSON.valueToTree(stopCounts));
-    summary.set("api_errors", JSON.valueToTree(apiErrors));
-    summary.set("tool_denials", JSON.valueToTree(denials));
-    summary.set("permission_modes", JSON.valueToTree(named.get("permission_mode")));
+    summary.set("stopReasons", JSON.valueToTree(stopCounts));
+    summary.set("apiErrors", JSON.valueToTree(apiErrors));
+    summary.set("toolDenials", JSON.valueToTree(denials));
+    summary.set("permissionModes", JSON.valueToTree(named.get("permission_mode")));
     summary.set("skills", JSON.valueToTree(named.get("skill")));
     summary.set("plugins", JSON.valueToTree(named.get("plugin")));
-    summary.set("mcp_servers", JSON.valueToTree(named.get("mcp_server")));
+    summary.set("mcpServers", JSON.valueToTree(named.get("mcp_server")));
     summary.set("commands", JSON.valueToTree(named.get("command")));
-    summary.set("pull_requests", JSON.valueToTree(pullRequests));
+    summary.set("pullRequests", JSON.valueToTree(pullRequests));
     ArrayNode toolRows = summary.putArray("tools");
     tools.forEach((tool, counts) -> toolRows.addObject().put("tool", tool).put("calls", counts[0]).put("errors", counts[1]));
     summary.set("usage", JSON.valueToTree(usage));
@@ -671,17 +695,17 @@ public final class Main {
                 List<String> parts = new ArrayList<>();
                 value.forEach(part -> parts.add(part.asText()));
                 shown = String.join(", ", parts);
-              } else if (name.endsWith("_ms")) {
-                name = name.substring(0, name.length() - "_ms".length());
+              } else if (name.endsWith("Ms")) {
+                name = name.substring(0, name.length() - "Ms".length());
                 shown = duration(value.asLong());
-              } else if (name.equals("cost_usd")) {
+              } else if (name.equals("costUsd")) {
                 shown = String.format("$%.2f (as Claude Code last wrote it down)", value.asDouble());
-              } else if (name.endsWith("_at")) {
+              } else if (name.endsWith("At")) {
                 shown = TIME.format(Instant.parse(value.asText()));
               } else {
                 shown = value.asText();
               }
-              out.printf("%-20s  %s%n", name.replace('_', ' '), shown);
+              out.printf("%-20s  %s%n", name.replaceAll("([A-Z])", " $1").toLowerCase(java.util.Locale.ROOT), shown);
             });
     if (!tools.isEmpty()) {
       int width = tools.keySet().stream().mapToInt(String::length).max().orElse(4);
