@@ -21,6 +21,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Properties;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -173,6 +174,17 @@ class UiServerTest {
           all.path("records").get(0).path("text").asText(),
           "text goes out as it was recorded; the page puts it in as text");
       assertEquals("typed", all.path("records").get(0).path("attributes").path("prompt_source").asText());
+
+      JsonNode newestFirst = json(server, "/api/sessions/" + SESSION + "/records?order=desc&limit=2");
+      assertEquals(4, newestFirst.path("total").asInt());
+      assertEquals(
+          List.of("context", "tool_result"),
+          List.of(newestFirst.path("records").get(0).path("kind").asText(), newestFirst.path("records").get(1).path("kind").asText()),
+          "from the last record back");
+      assertEquals(
+          "user_prompt",
+          json(server, "/api/sessions/" + SESSION + "/records?order=desc&offset=3").path("records").get(0).path("kind").asText());
+      assertEquals(0, json(server, "/api/sessions/" + SESSION + "/records?offset=99").path("records").size());
 
       JsonNode tools = json(server, "/api/sessions/" + SESSION + "/records?kinds=tool_use,tool_result&offset=1&limit=5");
       assertEquals(2, tools.path("total").asInt(), "of the kinds asked for");
