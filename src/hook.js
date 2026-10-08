@@ -14,6 +14,49 @@ function optedOut(cwd) {
   }
 }
 
+// A file's modification time can trail the clock by a few milliseconds; within this of the last
+// ingest's start, it is taken as written after it.
+const CLOCK_SLACK_MILLIS = 100;
+
+/** When the last ingest that recorded this session started, or null when none has. */
+function recordedAt(done) {
+  try {
+    const written = Date.parse(fs.readFileSync(done, 'utf8').trim());
+    return Number.isNaN(written) ? fs.statSync(done).mtimeMs : written;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether the session's transcripts were written to since `recorded`. Claude Code fires more events
+ * that ask for an ingest than there are responses (one for a helper it runs after each), and
+ * starting the engine for nothing costs most of a second of CPU.
+ */
+export function writtenSince(transcript, sessionId, recorded) {
+  const files = [transcript];
+  const subagents = path.join(path.dirname(transcript), sessionId, 'subagents');
+  try {
+    for (const name of fs.readdirSync(subagents)) {
+      if (name.endsWith('.jsonl')) files.push(path.join(subagents, name));
+    }
+  } catch {
+    // No sub-agent has run.
+  }
+  for (const file of files) {
+    let modified;
+    try {
+      modified = fs.statSync(file).mtimeMs;
+    } catch {
+      continue;
+    }
+    // A file system that keeps whole seconds says nothing about the rest of that second.
+    const since = Number.isInteger(modified / 1000) ? Math.floor(recorded / 1000) * 1000 : recorded - CLOCK_SLACK_MILLIS;
+    if (modified >= since) return true;
+  }
+  return false;
+}
+
 function readStdin() {
   return new Promise((resolve) => {
     let data = '';
@@ -60,6 +103,14 @@ export async function runHook(input) {
     // The account is fixed at the first event seen for a session and kept for its lifetime.
     const identity = queued.account ? { host_id: queued.host_id, account: queued.account } : resolveIdentity();
     const now = new Date().toISOString();
+    // The end of a session always asks: its entry has to leave the queue. Anything else asks only
+    // when there is something to record.
+    const recorded = recordedAt(path.join(spool, `${sessionId}.done`));
+    const asks =
+      INGEST_ON.has(event.hook_event_name) &&
+      (event.hook_event_name === 'SessionEnd' ||
+        recorded === null ||
+        writtenSince(event.transcript_path, sessionId, recorded));
     const entry = {
       session_id: sessionId,
       transcript_path: event.transcript_path,
@@ -69,14 +120,14 @@ export async function runHook(input) {
       ended: event.hook_event_name === 'SessionEnd',
       updated_at: now,
       // Compared with the engine's <session>.done mark: later than it means not yet recorded.
-      ingest_requested_at: INGEST_ON.has(event.hook_event_name) ? now : (queued.ingest_requested_at ?? null),
+      ingest_requested_at: asks ? now : (queued.ingest_requested_at ?? null),
     };
     const temporary = `${file}.${process.pid}.tmp`;
     fs.writeFileSync(temporary, JSON.stringify(entry), { mode: 0o600 });
     fs.renameSync(temporary, file);
 
-    if (INGEST_ON.has(event.hook_event_name) && process.env.CCREC_NO_INGEST !== '1') {
-      spawnIngest(home, sessionId);
+    if (asks && process.env.CCREC_NO_INGEST !== '1') {
+      spawnIngest(home, sessionId, event.hook_event_name);
     }
   } catch (error) {
     try {
