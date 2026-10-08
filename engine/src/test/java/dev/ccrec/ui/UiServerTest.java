@@ -383,4 +383,44 @@ class UiServerTest {
       }
     }
   }
+
+  @Test
+  void recordsComeInTheOrderTheyHappenedASubAgentsAmongTheMainThreads(@TempDir Path dir) throws Exception {
+    String session = "88888888-2222-3333-4444-555555555555";
+    String said = "{\"type\":\"%s\",\"timestamp\":\"2026-10-07T%s.000Z\",\"message\":{\"role\":\"%s\",\"content\":%s}}";
+    try (RecordStore store = store(dir)) {
+      Path transcript = dir.resolve(session + ".jsonl");
+      Files.writeString(
+          transcript,
+          String.join(
+                  "\n",
+                  String.format(said, "user", "01:00:00", "user", "\"morning\""),
+                  // No time of its own: it stays where it stands in the transcript.
+                  "{\"type\":\"system\",\"subtype\":\"informational\",\"content\":\"a note\"}",
+                  String.format(said, "user", "09:00:00", "user", "\"evening\""))
+              + "\n");
+      Path subagents = Files.createDirectories(dir.resolve(session).resolve("subagents"));
+      Files.writeString(subagents.resolve("agent-abc.jsonl"), String.format(said, "user", "01:05:00", "user", "\"look around\"") + "\n");
+      new Ingester(store, Redactor.standard(), Syncer.NONE, true, "host-1")
+          .ingestSession(transcript, session, new Account("acct-alice", null, null, "org-1", null, "env"));
+
+      try (UiServer server = new UiServer(store, "acct-alice", 0, TOKEN)) {
+        server.start();
+        java.util.function.Function<JsonNode, List<String>> texts =
+            page -> {
+              List<String> out = new java.util.ArrayList<>();
+              page.path("records").forEach(r -> out.add(r.path("text").asText()));
+              return out;
+            };
+        assertEquals(
+            List.of("morning", "a note", "look around", "evening"),
+            texts.apply(json(server, "/api/sessions/" + session + "/records")));
+        assertEquals(
+            List.of("evening", "look around", "a note", "morning"),
+            texts.apply(json(server, "/api/sessions/" + session + "/records?order=desc")),
+            "the latest first, not the sub-agent's because it is stored last");
+        assertEquals(List.of("look around"), texts.apply(json(server, "/api/sessions/" + session + "/records?agent=abc")));
+      }
+    }
+  }
 }

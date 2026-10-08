@@ -31,7 +31,7 @@ Claude Code でのやりとりを、アカウント単位でデータベース�
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.2.1.tgz
+npm install -g ./claude-code-recorder-1.2.2.tgz
 ```
 
 リポジトリから直接入れることもできます。この場合はインストール時にエンジンをビルドするので、JDK 17 以降とネットワーク接続が必要です。

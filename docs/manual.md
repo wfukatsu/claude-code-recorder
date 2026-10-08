@@ -37,7 +37,7 @@ Get the package (`.tgz`) from the GitHub release and install it with `npm instal
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.2.1.tgz
+npm install -g ./claude-code-recorder-1.2.2.tgz
 ccrec version
 ```
 
@@ -167,7 +167,7 @@ One row per record.
 
 - **Order**: newest first to begin with, so that the latest of a long session is right there. To read it as a conversation from the top, set "Order" to "Oldest first".
 - **What is shown**: checkboxes bring prompts, responses, tools, thinking, context and system records in and out. The numbers in parentheses are counts. Prompts, responses and tools are shown to begin with.
-- **Agent**: in a session that used sub-agents, narrow it to one of them.
+- **Agent**: in a session that used sub-agents, narrow it to one of them. Without that, a sub-agent's records appear among the main thread's at the time it ran.
 - **Load more**: up to 500 records are shown at a time; the button at the bottom loads the next ones.
 
 Prompts and responses are open from the start.

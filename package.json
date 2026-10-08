@@ -1,6 +1,6 @@
 {
   "name": "claude-code-recorder",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "description": "Records Claude Code exchanges (prompts, system prompt, responses, tool I/O, context) per account into a database through ScalarDB — SQLite locally, an RDBMS or NoSQL company-wide.",
   "author": "Wataru Fukatsu (Scalar, Inc.)",
