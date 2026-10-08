@@ -9,6 +9,14 @@
   --good: #2f7d4f;
   --bad: #b3261e;
   --code: #f3f1ed;
+  --info: #2f6f8f;
+  --info-soft: #e4eff5;
+  --quiet-soft: #f1efea;
+  --added: #e3f3e8;
+  --removed: #fbe6e4;
+  --j-key: #7a4a8f;
+  --j-string: #2f7d4f;
+  --j-number: #b4532a;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
@@ -24,6 +32,14 @@
     --good: #6fbf8c;
     --bad: #f08a80;
     --code: #262420;
+    --info: #7fb6d3;
+    --info-soft: #1f2e36;
+    --quiet-soft: #24221f;
+    --added: #1d3326;
+    --removed: #3a2220;
+    --j-key: #c79ad9;
+    --j-string: #8fd0a6;
+    --j-number: #e08a5f;
   }
 }
 
@@ -506,4 +522,269 @@ td.mark.good {
 td.mark.failed,
 td.failed {
   color: var(--bad);
+}
+
+/* ---- recorded text, laid out ---------------------------------------------------------------- */
+
+.record[open] > summary .line {
+  visibility: hidden;
+}
+
+.record.injected {
+  border-left: 3px solid var(--line);
+  background: var(--quiet-soft);
+}
+
+.record.injected .kind {
+  color: var(--muted);
+}
+
+.record.command {
+  border-left: 3px solid var(--info);
+}
+
+.record.command .kind {
+  color: var(--info);
+}
+
+.record.assistant_text {
+  border-left: 3px solid var(--good);
+}
+
+.record.failed {
+  border-left: 3px solid var(--bad);
+}
+
+.clamp {
+  max-height: 26em;
+  overflow: hidden;
+  position: relative;
+}
+
+.clamp.open {
+  max-height: none;
+}
+
+.clamp:not(.open):not(.short)::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3em;
+  background: linear-gradient(transparent, var(--panel));
+  pointer-events: none;
+}
+
+.record.injected .clamp:not(.open):not(.short)::after {
+  background: linear-gradient(transparent, var(--quiet-soft));
+}
+
+.text-tools {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.text-tools:empty {
+  display: none;
+}
+
+button.small {
+  font-size: 12px;
+  padding: 1px 8px;
+}
+
+.content > :first-child {
+  margin-top: 0;
+}
+
+.content > :last-child {
+  margin-bottom: 0;
+}
+
+.md-p {
+  margin: 0 0 0.7em;
+  overflow-wrap: anywhere;
+}
+
+.md-h {
+  font-weight: 700;
+  margin: 1em 0 0.4em;
+  line-height: 1.35;
+}
+
+.md-h1 {
+  font-size: 17px;
+}
+
+.md-h2 {
+  font-size: 15.5px;
+  padding-bottom: 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.md-h3,
+.md-h4,
+.md-h5,
+.md-h6 {
+  font-size: 14px;
+}
+
+.md-list {
+  margin: 0 0 0.7em;
+  padding-left: 1.5em;
+}
+
+.md-list .md-list {
+  margin-bottom: 0;
+}
+
+.md-list li {
+  margin: 0.15em 0;
+  overflow-wrap: anywhere;
+}
+
+.md-code {
+  font: 12.5px var(--mono);
+  background: var(--code);
+  border-radius: 4px;
+  padding: 1px 5px;
+  overflow-wrap: anywhere;
+}
+
+.md-link {
+  color: var(--info);
+}
+
+.md-quote {
+  margin: 0 0 0.7em;
+  padding: 2px 12px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+
+.md-rule {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 1em 0;
+}
+
+.md-fence {
+  position: relative;
+  margin: 0 0 0.7em;
+}
+
+.md-lang {
+  position: absolute;
+  top: 4px;
+  right: 8px;
+  font: 11px var(--mono);
+  color: var(--muted);
+}
+
+.md-table {
+  overflow-x: auto;
+  margin: 0 0 0.7em;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.md-table th,
+.md-table td {
+  padding: 5px 10px;
+}
+
+.md-table th {
+  background: var(--code);
+  color: var(--text);
+  font-size: 13px;
+  white-space: normal;
+}
+
+pre.code {
+  max-height: none;
+}
+
+pre.code.shell {
+  border-left: 3px solid var(--info);
+}
+
+pre.code.added {
+  background: var(--added);
+  border-left: 3px solid var(--good);
+}
+
+pre.code.removed {
+  background: var(--removed);
+  border-left: 3px solid var(--bad);
+  margin-bottom: 4px;
+}
+
+pre.code.bad {
+  border-left: 3px solid var(--bad);
+}
+
+.j-key {
+  color: var(--j-key);
+}
+
+.j-string {
+  color: var(--j-string);
+}
+
+.j-number,
+.j-literal {
+  color: var(--j-number);
+}
+
+.caption {
+  color: var(--muted);
+  font-size: 13px;
+  margin: 0 0 4px;
+  overflow-wrap: anywhere;
+}
+
+.caption.path {
+  font: 12.5px var(--mono);
+  color: var(--text);
+}
+
+.block {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px 8px;
+  margin: 0 0 0.7em;
+  background: var(--quiet-soft);
+}
+
+.block-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+  font-family: var(--mono);
+}
+
+.block.command {
+  background: var(--info-soft);
+  border-color: transparent;
+}
+
+.block.command .block-label {
+  color: var(--info);
+}
+
+.block.reminder > summary {
+  cursor: pointer;
+  margin-bottom: 0;
+}
+
+.block.reminder[open] > summary {
+  margin-bottom: 6px;
+}
+
+.block dl.facts {
+  font-size: 13px;
+  margin-bottom: 6px;
 }

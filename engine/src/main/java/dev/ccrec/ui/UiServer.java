@@ -56,6 +56,7 @@ public final class UiServer implements AutoCloseable {
       Map.of(
           "/", "index.html",
           "/app.js", "app.js",
+          "/render.js", "render.js",
           "/app.css", "app.css");
   private static final Map<String, String> CONTENT_TYPES =
       Map.of(
