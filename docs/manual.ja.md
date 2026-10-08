@@ -37,7 +37,7 @@ Java は実行できれば足ります。配布パッケージにはビルド済
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.2.1.tgz
+npm install -g ./claude-code-recorder-1.2.2.tgz
 ccrec version
 ```
 
