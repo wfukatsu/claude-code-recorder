@@ -223,6 +223,9 @@ class MainTest {
                 String.format(result, "t1", "true"),
                 assistant("msg_2", "claude-opus-5-5", "tool_use", "{\"type\":\"tool_use\",\"id\":\"t2\",\"name\":\"Bash\",\"input\":{}}", ""),
                 String.format(result, "t2", "false"),
+                // Two calls to one MCP server; Claude Code names the server on one line only, and differently.
+                assistant("msg_4", "claude-opus-5-5", "tool_use", "{\"type\":\"tool_use\",\"id\":\"t3\",\"name\":\"mcp__team_wiki__search\",\"input\":{}}", ",\"attributionMcpServer\":\"Team Wiki\""),
+                assistant("msg_5", "claude-opus-5-5", "tool_use", "{\"type\":\"tool_use\",\"id\":\"t4\",\"name\":\"mcp__team_wiki__read_page\",\"input\":{}}", ""),
                 assistant("msg_3", "claude-haiku-4-5", "end_turn", "{\"type\":\"text\",\"text\":\"done\"}", ""),
                 "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"durationMs\":65000}",
                 pr,
@@ -240,16 +243,16 @@ class MainTest {
     assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
 
     String one = printed(0, "usage", "busy", "--home", home.toString());
-    assertTrue(one.lines().anyMatch(l -> l.matches("busy +claude-opus-5-5 +2 +2,000 +400 +100 +60 +80 +6")), one);
-    assertTrue(one.lines().anyMatch(l -> l.matches("total +1 session +3 +3,000 +600 +150 +90 +120 +9")), one);
+    assertTrue(one.lines().anyMatch(l -> l.matches("busy +claude-opus-5-5 +4 +4,000 +800 +200 +120 +160 +12")), one);
+    assertTrue(one.lines().anyMatch(l -> l.matches("total +1 session +5 +5,000 +1,000 +250 +150 +200 +15")), one);
 
     String all = printed(0, "usage", "--account", "acct-1", "--home", home.toString());
     assertTrue(all.lines().anyMatch(l -> l.matches("acct-1 +claude-haiku-4-5 +2 +2,000 +400 +100 +60 +80 +6")), all);
-    assertTrue(all.lines().anyMatch(l -> l.matches("total +2 sessions +6 +6,000 .*")), all);
+    assertTrue(all.lines().anyMatch(l -> l.matches("total +2 sessions +10 +10,000 .*")), all);
 
     JsonNode json = new ObjectMapper().readTree(printed(0, "usage", "busy", "--json", "--home", home.toString()));
     assertEquals(2, json.size());
-    assertEquals(100, json.get(1).path("thinkingTokens").asInt());
+    assertEquals(200, json.get(1).path("thinkingTokens").asInt());
 
     String wrong = "";
     try {
@@ -278,10 +281,12 @@ class MainTest {
     assertEquals(1, summary.path("turns").asInt());
     assertEquals(65000, summary.path("turnDurationMs").asLong());
     assertEquals(3000, summary.path("thinkingDurationMs").asLong(), "said by a line that left no record");
-    assertEquals(2, summary.path("stopReasons").path("tool_use").asInt(), "per API message, not per record");
+    assertEquals(4, summary.path("stopReasons").path("tool_use").asInt(), "per API message, not per record");
     assertEquals(1, summary.path("stopReasons").path("end_turn").asInt());
     assertEquals("acceptEdits", summary.path("permissionModes").get(0).asText());
     assertEquals(1, summary.path("pullRequests").size());
+    assertEquals(2, summary.path("mcpServers").path("team_wiki").asInt());
+    assertEquals(1, summary.path("mcpServers").size());
     assertEquals("Bash", summary.path("tools").get(0).path("tool").asText());
     assertEquals(2, summary.path("tools").get(0).path("calls").asInt());
     assertEquals(1, summary.path("tools").get(0).path("errors").asInt());
@@ -290,8 +295,9 @@ class MainTest {
     String text = printed(0, "summary", "busy", "--account", "acct-1", "--home", home.toString());
     assertTrue(text.contains("cost usd              $1.50"), text);
     assertTrue(text.lines().anyMatch(l -> l.matches("turn duration +1m05s")), text);
-    assertTrue(text.lines().anyMatch(l -> l.matches("stop reasons +end_turn 1, tool_use 2")), text);
+    assertTrue(text.lines().anyMatch(l -> l.matches("stop reasons +end_turn 1, tool_use 4")), text);
     assertTrue(text.lines().anyMatch(l -> l.matches("Bash +2 +1")), text);
+    assertTrue(text.lines().anyMatch(l -> l.matches("mcp servers +team_wiki 2")), text);
 
     assertTrue(printed(1, "summary", "nope", "--account", "acct-1", "--home", home.toString()).contains("not recorded"));
   }

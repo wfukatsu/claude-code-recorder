@@ -63,6 +63,23 @@ class TranscriptParserTest {
   }
 
   @Test
+  void whatAnMcpServerReturnsBesideTheTextIsKeptWithItsCall() {
+    String result =
+        "{\"type\":\"user\",\"mcpMeta\":%s,\"message\":{\"role\":\"user\",\"content\":["
+            + "{\"type\":\"tool_result\",\"tool_use_id\":\"t1\",\"content\":[{\"type\":\"text\",\"text\":\"2 records\"}]}]}}";
+    String meta = "{\"structuredContent\":{\"totalSize\":2,\"records\":[{\"id\":1},{\"id\":2}]},\"_meta\":{\"tags\":[\"read\"]}}";
+
+    List<Block> blocks = parser.parse(String.format(result, meta)).blocks();
+    assertEquals(List.of(TranscriptParser.TOOL_RESULT, TranscriptParser.MCP_META), blocks.stream().map(Block::kind).toList());
+    assertEquals("2 records", blocks.get(0).text());
+    assertEquals(meta, blocks.get(1).text());
+    assertEquals("t1", blocks.get(1).toolUseId());
+
+    assertEquals(1, parser.parse(String.format(result, "{}")).blocks().size(), "an empty one says nothing");
+    assertEquals(1, parser.parse(String.format(result, "null")).blocks().size());
+  }
+
+  @Test
   void anAttributeIsAShortFactOrAbsent() {
     TranscriptParser.Line plain = parser.parse("{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"hi\"}}");
     assertEquals(null, plain.attributes(), "a line that says nothing about itself has none");

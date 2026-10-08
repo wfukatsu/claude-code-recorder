@@ -33,6 +33,7 @@ public final class TranscriptParser {
   public static final String SYSTEM = "system";
   public static final String COST = "cost";
   public static final String PR_LINK = "pr_link";
+  public static final String MCP_META = "mcp_meta";
   public static final String UNKNOWN = "unknown";
 
   /** Session bookkeeping that carries no conversation content. */
@@ -109,6 +110,7 @@ public final class TranscriptParser {
         JsonNode content = node.path("message").path("content");
         if (content.isTextual() || content.isArray()) {
           userBlocks(node, content, blocks);
+          mcpMeta(node, blocks);
         } else {
           blocks.add(new Block(UNKNOWN, type, raw, null, null));
         }
@@ -322,6 +324,21 @@ public final class TranscriptParser {
         default -> add(blocks, "user_" + type, null, block.toString(), null, null);
       }
     }
+  }
+
+  /**
+   * What an MCP server returned beside the text the model reads: the structured form of the result
+   * and the server's own metadata. It is content, and can be large, so it is a block of its own,
+   * tied to the call by the tool-use id of the result it came with.
+   */
+  private static void mcpMeta(JsonNode node, List<Block> blocks) {
+    JsonNode meta = node.path("mcpMeta");
+    if (!meta.isContainerNode() || meta.isEmpty()) {
+      return;
+    }
+    String toolUseId =
+        blocks.stream().filter(block -> block.kind().equals(TOOL_RESULT)).map(Block::toolUseId).findFirst().orElse(null);
+    blocks.add(new Block(MCP_META, null, meta.toString(), null, toolUseId));
   }
 
   private static void assistantBlocks(JsonNode content, List<Block> blocks) {
