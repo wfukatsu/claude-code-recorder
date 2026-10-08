@@ -87,6 +87,7 @@ Claude Code は 1 回の API 応答をブロックごとの複数行に分けて
 | `recordThinking` | `true` | thinking ブロックを記録する |
 | `redact` | `true` | 保存前に既知の形式の認証情報を `[REDACTED]` に置き換える（下記） |
 | `exclude` | なし | 記録しない種類の一覧。`kind`、または `kind/subtype` で指定する |
+| `localMcpServers` | なし | この端末の中だけで動く MCP サーバーの名前の一覧。ブラウザ UI の「外部通信」から外す。記録には影響しない |
 
 `exclude` の例です。ほかのフックの実行結果（`context/hook_success`）は、フックを多く入れた環境では記録の半分近くを占めます。
 
@@ -144,6 +145,17 @@ scalar.db.transaction_manager=consensus-commit
 - 記録された文字は、画面にテキストとしてだけ差し込みます。HTML として解釈することはありません。Markdown の整形も、要素を組み立てて文字を入れる方式です。リンクになるのは `http://` と `https://` で始まる URL だけです。
 - 応答には `Content-Security-Policy: default-src 'self'` を付けます。インラインのスクリプトとスタイルは使っていません。
 
+### 外部通信の判定
+
+「外部通信」は、記録済みのツール呼び出しを表示のときに判定します（`dev.ccrec.net.NetworkUse`）。データベースには何も足さないので、以前に記録したセッションでも使えます。判定を変えれば、過去の分の見え方も変わります。
+
+- アドレスを持つツール（`url` の入力）は、そのホストを送信先にします。
+- `mcp__<サーバー>__<ツール>` は、入力にアドレスがあればそのホスト、なければサーバーを送信先にします。端末内で動くと分かっているサーバー（`claude-in-chrome`、`playwright`、`serena` など）と、設定の `localMcpServers` に書かれたサーバーは、アドレスが無ければ数えません。
+- シェルコマンドは、プログラムごとに読みます。常に通信するプログラム（`curl`、`gh`、`ssh` など）と、特定のサブコマンドで通信するプログラム（`git push`、`npm install` など）を見分け、その引数にあるアドレスを送信先にします。ヒアドキュメントの本文は読み飛ばします。
+- ループバック、プライベートアドレス、ドットの無いホスト名、Claude のドメインは、送信先から外します。
+
+通信を捕捉しているわけではないので、スクリプトの内部からの通信は見つけられません。
+
 API は次のとおりです。どれもトークンが必要です。
 
 | メソッドとパス | 内容 |
@@ -151,7 +163,9 @@ API は次のとおりです。どれもトークンが必要です。
 | `GET /api/accounts` | 記録のあるアカウントと、起動した人のアカウント |
 | `GET /api/sessions?account=&limit=` | アカウントのセッション（新しい順、最大 1,000 件）と、それぞれの使用量 |
 | `GET /api/sessions/{id}` | セッションの要約（`ccrec summary --json` と同じ内容に、種類別の件数とエージェントの一覧を足したもの） |
-| `GET /api/sessions/{id}/records?kinds=&agent=&order=&offset=&limit=` | レコードのページ（最大 500 件）。本文は先頭 300 文字 |
+| `GET /api/sessions/{id}/records?kinds=&agent=&order=&offset=&limit=` | レコードのページ（最大 500 件）。本文は先頭 300 文字。外部に届いたツール呼び出しには `network`（経路、送信先、送信内容の 1 行）が付く |
+| `GET /api/sessions/{id}/records?network=1&host=&categories=&order=&offset=` | 外部に届いたツール呼び出しと、その結果だけのページ |
+| `GET /api/sessions/{id}/network` | 外部に届いたツール呼び出しの、送信先ごとの集計 |
 | `GET /api/content/{hash}` | 本文の全文 |
 | `GET /api/status` | 状態の画面の内容 |
 | `POST /api/sessions/delete` | セッションの削除（`{"sessionIds": [...]}`、最大 50 件） |

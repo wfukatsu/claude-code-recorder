@@ -13,6 +13,7 @@ import dev.ccrec.model.Account;
 import dev.ccrec.model.MessageRecord;
 import dev.ccrec.model.SessionRecord;
 import dev.ccrec.model.UsageRecord;
+import dev.ccrec.net.NetworkUse;
 import dev.ccrec.store.RecordStore;
 import java.io.IOException;
 import java.io.InputStream;
@@ -79,6 +80,7 @@ public final class UiServer implements AutoCloseable {
   private final JsonNode launcher;
   private final HttpServer server;
   private final ExecutorService workers = Executors.newFixedThreadPool(4);
+  private final Map<String, Optional<NetworkUse.Use>> networkUses = new java.util.concurrent.ConcurrentHashMap<>();
 
   /**
    * @param currentAccountId the account of whoever started the UI, which it opens on; may be null
@@ -298,6 +300,8 @@ public final class UiServer implements AutoCloseable {
       }
     } else if (parts.length == 3 && parts[0].equals("sessions") && parts[2].equals("records")) {
       json(exchange, 200, records(parts[1], query));
+    } else if (parts.length == 3 && parts[0].equals("sessions") && parts[2].equals("network")) {
+      json(exchange, 200, network(parts[1]));
     } else if (parts.length == 2 && parts[0].equals("content") && parts[1].matches("[0-9a-f]{64}")) {
       Optional<String> content = store.content(parts[1]);
       if (content.isPresent()) {
@@ -425,9 +429,33 @@ public final class UiServer implements AutoCloseable {
     int offset = number(query, "offset", 0, Integer.MAX_VALUE);
     int limit = number(query, "limit", PAGE_RECORDS, PAGE_RECORDS);
     List<MessageRecord> matching = new java.util.ArrayList<>();
-    for (MessageRecord m : store.messages(sessionId)) {
-      if ((kinds == null || kinds.contains(m.kind())) && (agent == null || agent.equals(m.agentId()))) {
-        matching.add(m);
+    List<MessageRecord> all = store.messages(sessionId);
+    if ("1".equals(query.get("network"))) {
+      // Only the calls that reach beyond this machine and Claude, each with what came back.
+      String host = query.get("host");
+      Set<String> categories = query.containsKey("categories") ? Set.of(query.get("categories").split(",")) : null;
+      Set<String> localMcp = localMcpServers();
+      Set<String> calls = new java.util.HashSet<>();
+      for (MessageRecord m : all) {
+        if (m.kind().equals("tool_use") && (agent == null || agent.equals(m.agentId()))) {
+          Optional<NetworkUse.Use> use = networkUse(m, localMcp);
+          if (use.isPresent()
+              && (host == null || use.get().hosts().contains(host))
+              && (categories == null || categories.contains(use.get().category()))) {
+            matching.add(m);
+            if (m.toolUseId() != null) {
+              calls.add(m.toolUseId());
+            }
+          }
+        } else if ((m.kind().equals("tool_result") || m.kind().equals("mcp_meta")) && calls.contains(m.toolUseId())) {
+          matching.add(m);
+        }
+      }
+    } else {
+      for (MessageRecord m : all) {
+        if ((kinds == null || kinds.contains(m.kind())) && (agent == null || agent.equals(m.agentId()))) {
+          matching.add(m);
+        }
       }
     }
     // Newest first when asked: the end of a long session is then on the first page.
@@ -436,6 +464,7 @@ public final class UiServer implements AutoCloseable {
     }
     ObjectNode page = JSON.createObjectNode();
     ArrayNode records = page.putArray("records");
+    Set<String> localMcpServers = localMcpServers();
     for (MessageRecord m : matching.subList(Math.min(offset, matching.size()), (int) Math.min((long) offset + limit, matching.size()))) {
       ObjectNode node = records.addObject();
       node.put("agentId", m.agentId());
@@ -461,10 +490,98 @@ public final class UiServer implements AutoCloseable {
       if (!attributes.isEmpty()) {
         node.set("attributes", attributes);
       }
+      if (m.kind().equals("tool_use")) {
+        networkUse(m, localMcpServers).ifPresent(use -> node.set("network", JSON.valueToTree(use)));
+      }
     }
     page.put("offset", offset);
     page.put("total", matching.size());
     return page;
+  }
+
+  // ---- what reaches beyond this machine ----------------------------------------------------
+
+  /**
+   * Whether a tool call reaches beyond this machine and Claude, and where to. A shell command or an
+   * MCP input longer than what the record keeps at hand is read in full, once, and remembered.
+   */
+  private Optional<NetworkUse.Use> networkUse(MessageRecord m, Set<String> localMcpServers) {
+    if (m.toolName() == null || m.contentHash() == null) {
+      return Optional.empty();
+    }
+    String key = m.toolName() + "\n" + m.contentHash() + "\n" + localMcpServers.hashCode();
+    Optional<NetworkUse.Use> known = networkUses.get(key);
+    if (known != null) {
+      return known;
+    }
+    String input = m.preview() == null ? "" : m.preview();
+    boolean cutShort = m.contentBytes() > input.getBytes(StandardCharsets.UTF_8).length;
+    if (cutShort && (m.toolName().equals("Bash") || m.toolName().startsWith("mcp__"))) {
+      input = store.content(m.contentHash()).orElse(input);
+    }
+    Optional<NetworkUse.Use> use = NetworkUse.of(m.toolName(), input, localMcpServers);
+    if (networkUses.size() > 50_000) {
+      networkUses.clear();
+    }
+    networkUses.put(key, use);
+    return use;
+  }
+
+  /** The MCP servers the settings say stay on this machine. */
+  private Set<String> localMcpServers() {
+    Set<String> servers = new java.util.HashSet<>();
+    if (home != null && Files.isRegularFile(home.resolve("config.json"))) {
+      try {
+        JSON.readTree(Files.readString(home.resolve("config.json"))).path("localMcpServers").forEach(s -> servers.add(s.asText()));
+      } catch (IOException e) {
+        // Settings that cannot be read name no server.
+      }
+    }
+    return servers;
+  }
+
+  /** Where a session's tool calls went, by destination: how often, how much was sent and came back. */
+  private ObjectNode network(String sessionId) {
+    Set<String> localMcp = localMcpServers();
+    List<MessageRecord> all = store.messages(sessionId);
+    Map<String, long[]> came = new HashMap<>();
+    for (MessageRecord m : all) {
+      if (m.kind().equals("tool_result") && m.toolUseId() != null) {
+        came.put(m.toolUseId(), new long[] {m.contentBytes(), "error".equals(m.subtype()) ? 1 : 0});
+      }
+    }
+    Map<String, ObjectNode> hosts = new java.util.LinkedHashMap<>();
+    Map<String, Integer> categories = new java.util.TreeMap<>();
+    int calls = 0;
+    for (MessageRecord m : all) {
+      if (!m.kind().equals("tool_use")) {
+        continue;
+      }
+      Optional<NetworkUse.Use> use = networkUse(m, localMcp);
+      if (use.isEmpty()) {
+        continue;
+      }
+      calls++;
+      categories.merge(use.get().category(), 1, Integer::sum);
+      long[] back = came.getOrDefault(m.toolUseId(), new long[2]);
+      for (String host : use.get().hosts()) {
+        ObjectNode row = hosts.computeIfAbsent(host, h -> JSON.createObjectNode().put("host", h).put("category", use.get().category()));
+        row.put("calls", row.path("calls").asLong() + 1);
+        row.put("sentBytes", row.path("sentBytes").asLong() + m.contentBytes());
+        row.put("receivedBytes", row.path("receivedBytes").asLong() + back[0]);
+        row.put("errors", row.path("errors").asLong() + back[1]);
+        if (m.ts() != null) {
+          row.put("lastAt", Math.max(row.path("lastAt").asLong(), m.ts()));
+        }
+      }
+    }
+    ObjectNode node = JSON.createObjectNode();
+    node.put("calls", calls);
+    node.set("categories", JSON.valueToTree(categories));
+    List<ObjectNode> rows = new java.util.ArrayList<>(hosts.values());
+    rows.sort(java.util.Comparator.comparingLong((ObjectNode row) -> row.path("calls").asLong()).reversed());
+    node.putArray("hosts").addAll(rows);
+    return node;
   }
 
   private static int cut(String text) {
