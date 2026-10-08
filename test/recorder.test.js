@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
-import { runHook } from '../src/hook.js';
+import { runHook, writtenSince } from '../src/hook.js';
 import { resolveIdentity } from '../src/identity.js';
 import { HOOK_EVENTS, hooksInstalled, installHooks, uninstallHooks } from '../src/install.js';
 import { queueStatus } from '../src/queue.js';
@@ -210,4 +210,55 @@ test('installing hooks keeps a symlinked settings file a symlink, with its mode'
   assert.equal(hooksInstalled(real), true);
   assert.equal(fs.statSync(real).mode & 0o777, 0o600);
   assert.deepEqual(fs.readdirSync(path.dirname(real)), ['settings.json'], 'no temporary file is left');
+});
+
+test('an event asks for an ingest only when the transcripts were written to since the last one', async () => {
+  const home = scratch();
+  const project = scratch();
+  const spool = path.join(home, 'spool');
+  const transcript = path.join(project, 'sess-q.jsonl');
+  fs.writeFileSync(transcript, '{}\n');
+  const event = (name) =>
+    JSON.stringify({ session_id: 'sess-q', transcript_path: transcript, cwd: home, hook_event_name: name });
+  const requested = () => JSON.parse(fs.readFileSync(path.join(spool, 'sess-q.json'), 'utf8')).ingest_requested_at;
+  const at = (file, millis) => fs.utimesSync(file, new Date(millis), new Date(millis));
+  let recorded;
+
+  await withEnv({ ...noAdmin, CCREC_HOME: home, CCREC_NO_INGEST: '1' }, async () => {
+    // Never recorded: it asks.
+    await runHook(event('Stop'));
+    const first = requested();
+    assert.ok(first);
+
+    // Recorded, and nothing written since: the event Claude Code fires after the response asks for nothing.
+    recorded = Date.now() + 1;
+    fs.writeFileSync(path.join(spool, 'sess-q.done'), new Date(recorded).toISOString());
+    at(transcript, recorded - 5000.5);
+    await runHook(event('SubagentStop'));
+    assert.equal(requested(), first);
+    assert.equal(queueStatus(home).waiting, 0);
+
+    // A sub-agent's transcript counts as much as the main one.
+    const subagents = path.join(project, 'sess-q', 'subagents');
+    fs.mkdirSync(subagents, { recursive: true });
+    fs.writeFileSync(path.join(subagents, 'agent-a1.jsonl'), '{}\n');
+    at(path.join(subagents, 'agent-a1.jsonl'), recorded + 2000.5);
+    assert.equal(writtenSince(transcript, 'sess-q', recorded), true);
+    await runHook(event('SubagentStop'));
+    assert.notEqual(requested(), first);
+
+    // The end of the session asks whatever the files say.
+    at(path.join(subagents, 'agent-a1.jsonl'), recorded - 5000.5);
+    const before = requested();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await runHook(event('SessionEnd'));
+    assert.notEqual(requested(), before);
+  });
+
+  // Whole-second modification times: a write in the second of the ingest's start may have come after it.
+  at(transcript, Math.floor(recorded / 1000) * 1000);
+  fs.rmSync(path.join(project, 'sess-q'), { recursive: true });
+  assert.equal(writtenSince(transcript, 'sess-q', recorded), true);
+  at(transcript, Math.floor(recorded / 1000) * 1000 - 1000);
+  assert.equal(writtenSince(transcript, 'sess-q', recorded), false);
 });

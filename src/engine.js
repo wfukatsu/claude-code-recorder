@@ -44,14 +44,27 @@ export function runEngine(home, args, identity) {
   return result.status ?? 1;
 }
 
-/** Starts an ingest that outlives the hook, so Claude Code never waits on the database. */
-export function spawnIngest(home, sessionId) {
+const LOG_BYTES = 1024 * 1024;
+
+/**
+ * Starts an ingest that outlives the hook, so Claude Code never waits on the database. The log says
+ * when and for which event each one was started; past a megabyte it is moved aside, once.
+ */
+export function spawnIngest(home, sessionId, eventName) {
   if (!fs.existsSync(jarPath())) return;
-  const log = fs.openSync(path.join(home, 'logs', 'ingest.log'), 'a', 0o600);
+  const file = path.join(home, 'logs', 'ingest.log');
+  try {
+    if (fs.statSync(file).size > LOG_BYTES) fs.renameSync(file, `${file}.1`);
+  } catch {
+    // No log yet.
+  }
+  const log = fs.openSync(file, 'a', 0o600);
+  fs.writeSync(log, `${new Date().toISOString()} ${eventName} ${sessionId}\n`);
   const child = spawn(javaCommand(), javaArgs(home, ['ingest', '--session', sessionId]), {
     detached: true,
     stdio: ['ignore', log, log],
   });
   child.on('error', () => {});
   child.unref();
+  fs.closeSync(log);
 }
