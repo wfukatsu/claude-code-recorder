@@ -195,6 +195,14 @@ public final class Main {
     }
     Path transcript = Path.of(queued.path("transcript_path").asText(""));
     if (!Files.isRegularFile(transcript)) {
+      if (queued.path("ended").asBoolean(false)) {
+        // Opened and closed with nothing said: Claude Code writes no transcript for that, and now
+        // never will. There is nothing to record, so it is not left waiting for one.
+        out.printf("%s  ended without a transcript: nothing to record%n", sessionId);
+        Files.deleteIfExists(entry);
+        Files.deleteIfExists(done);
+        return;
+      }
       if (!SpoolQueue.waiting(queued, done)) {
         // A session that has only started may have no transcript yet.
         return;
