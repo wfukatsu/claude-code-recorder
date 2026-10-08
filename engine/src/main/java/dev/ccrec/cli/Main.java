@@ -768,7 +768,14 @@ public final class Main {
     try (InputStream in = Files.newInputStream(config)) {
       properties.load(in);
     }
-    return new ScalarDbRecordStore(properties);
+    try {
+      return new ScalarDbRecordStore(properties);
+    } catch (NoClassDefFoundError e) {
+      // Only the drivers for SQLite and PostgreSQL are bundled.
+      throw new UsageException(
+          "the driver for this database is not bundled (" + e.getMessage() + " is missing); put its JAR in "
+              + home.resolve("drivers") + " and run this again");
+    }
   }
 
   private JsonNode settings() throws IOException {

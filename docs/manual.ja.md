@@ -37,7 +37,7 @@ Java は実行できれば足ります。配布パッケージにはビルド済
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.1.1.tgz
+npm install -g ./claude-code-recorder-1.2.0.tgz
 ccrec version
 ```
 
@@ -434,7 +434,7 @@ scalar.db.password=********
 scalar.db.transaction_manager=consensus-commit
 ```
 
-- 配布パッケージで使えるのは、SQLite、PostgreSQL、MariaDB です。
+- 配布パッケージのままで使えるのは、SQLite と PostgreSQL です。MariaDB や MySQL に記録する場合は、MariaDB のドライバーの JAR を `~/.ccrec/drivers/` に置きます。
 - それ以外のデータベースについては、[リファレンス](reference.ja.md#データベースを切り替える) を見てください。
 - 保存先を変えても、変える前の記録は移りません。
 

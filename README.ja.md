@@ -31,7 +31,7 @@ Claude Code でのやりとりを、アカウント単位でデータベース�
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.1.1.tgz
+npm install -g ./claude-code-recorder-1.2.0.tgz
 ```
 
 リポジトリから直接入れることもできます。この場合はインストール時にエンジンをビルドするので、JDK 17 以降とネットワーク接続が必要です。
@@ -114,3 +114,7 @@ npm pack        # 配布パッケージ（.tgz）を作る
 ```
 
 構成、依存バージョン、リリースの手順は [リファレンス](docs/reference.ja.md#開発) にあります。
+
+## ライセンス
+
+[Apache License 2.0](LICENSE) です。配布パッケージに同梱している第三者のライブラリは、それぞれのライセンスに従います。一覧は [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) にあります。

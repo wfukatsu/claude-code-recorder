@@ -31,7 +31,7 @@ Get the package from the GitHub release and install it with `npm install`. The p
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.1.1.tgz
+npm install -g ./claude-code-recorder-1.2.0.tgz
 ```
 
 It can also be installed straight from the repository. The engine is then built during the install, which needs JDK 17 or later and a network connection.
@@ -114,3 +114,7 @@ npm pack        # make the package (.tgz)
 ```
 
 The layout, the dependency versions and the release steps are in the [reference](docs/reference.md#development).
+
+## License
+
+[Apache License 2.0](LICENSE). The package bundles third-party libraries under their own licenses, listed in [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).

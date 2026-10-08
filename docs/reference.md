@@ -130,7 +130,7 @@ scalar.db.password=********
 scalar.db.transaction_manager=consensus-commit
 ```
 
-- The bundled JAR has the JDBC drivers for SQLite, PostgreSQL and MariaDB. For others (MySQL, Oracle and so on), put the driver's JAR in `~/.ccrec/drivers/`.
+- The bundled JAR has the JDBC drivers for SQLite and PostgreSQL. For others (MariaDB, MySQL, Oracle and so on), put the driver's JAR in `~/.ccrec/drivers/`. The MariaDB driver, which ScalarDB also uses for MySQL, is left out because it is under the LGPL; see [THIRD-PARTY-NOTICES.md](../THIRD-PARTY-NOTICES.md).
 - For DynamoDB, Cosmos DB, Cassandra and the like, build the JAR with every adapter (about 170 MB): `npm run build:full` makes `lib/ccrec-engine-full.jar`; point `CCREC_JAR` at it.
 - ScalarDB treats SQLite as a development and test store. This tool uses it with writes serialized into one process at a time, but do not use it as the place a company's recordings are gathered.
 - Opened directly, the SQLite file has tables named like `ccrec$messages`, with ScalarDB's transaction columns. Do not write to it directly.

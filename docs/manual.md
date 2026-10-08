@@ -37,7 +37,7 @@ Get the package (`.tgz`) from the GitHub release and install it with `npm instal
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.1.1.tgz
+npm install -g ./claude-code-recorder-1.2.0.tgz
 ccrec version
 ```
 
@@ -434,7 +434,7 @@ scalar.db.password=********
 scalar.db.transaction_manager=consensus-commit
 ```
 
-- The package works with SQLite, PostgreSQL and MariaDB.
+- The package works with SQLite and PostgreSQL as it comes. For MariaDB or MySQL, put the MariaDB driver's JAR in `~/.ccrec/drivers/`.
 - For other databases, see the [reference](reference.md#changing-the-database).
 - Changing where it records does not move what was recorded before.
 

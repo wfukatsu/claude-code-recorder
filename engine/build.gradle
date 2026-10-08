@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'dev.ccrec'
-version = '1.1.1'
+version = '1.2.0'
 
 java {
     sourceCompatibility = JavaVersion.VERSION_17
@@ -16,7 +16,7 @@ repositories {
 }
 
 // ScalarDB depends on every adapter's client at once (~165 MB). The default build keeps what the
-// JDBC adapter needs for SQLite, PostgreSQL and MariaDB; -Pfull keeps everything, for a deployment
+// JDBC adapter needs for SQLite and PostgreSQL; -Pfull keeps everything, for a deployment
 // that points the same code at DynamoDB, Cosmos DB, Cassandra, Oracle, SQL Server, Db2 or Spanner.
 def fullBuild = project.hasProperty('full')
 def adapterClientGroups = [
@@ -30,6 +30,9 @@ def adapterClientGroups = [
     'org.apache.httpcomponents', 'org.apache.httpcomponents.core5',
     'org.apache.httpcomponents.client5', 'com.oracle.database.jdbc', 'com.ibm.db2',
     'com.microsoft.sqlserver', 'com.yugabyte',
+    // LGPL-2.1: not bundled into the JAR this project distributes. Whoever records into MariaDB or
+    // MySQL puts the driver in <home>/drivers/, like any other driver that is not bundled.
+    'org.mariadb.jdbc',
 ]
 if (!fullBuild) {
     // Tests run on the same reduced classpath the published JAR has.
