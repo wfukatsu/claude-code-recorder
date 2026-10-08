@@ -117,6 +117,15 @@ Claude Code は 1 回の API 応答をブロックごとの複数行に分けて
 |---|---|---|
 | `recordThinking` | `true` | thinking ブロックを記録する |
 | `redact` | `true` | 保存前に既知の形式の認証情報を `[REDACTED]` に置き換える（下記） |
+| `exclude` | なし | 記録しない種類の一覧。`kind`、または `kind/subtype` で指定する |
+
+`exclude` の例です。ほかのフックの実行結果（`context/hook_success`）は、フックを多く入れた環境では記録の半分近くを占めます。
+
+```json
+{ "recordThinking": true, "redact": true, "exclude": ["context/hook_success"] }
+```
+
+設定は次の取り込みから効きます。記録済みの分は消えません。セッションにどの種類が何件あるかは、`ccrec show <session-id> --json` の `kind` と `subtype` で確かめられます。
 
 伏せる対象は次の 2 種類です。誤って伏せないことを優先しているので、これ以外の形の認証情報は残ります。
 

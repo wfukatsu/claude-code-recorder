@@ -51,6 +51,12 @@ dependencies {
 
 test {
     useJUnitPlatform()
+    // One line that survives -q, so a run says how much it ran and not only that nothing failed.
+    afterSuite { suite, result ->
+        if (suite.parent == null) {
+            println "Java tests: ${result.successfulTestCount} passed, ${result.failedTestCount} failed, ${result.skippedTestCount} skipped"
+        }
+    }
 }
 
 shadowJar {

@@ -541,6 +541,31 @@ class RecorderTest {
   }
 
   @Test
+  void whatTheSettingsExcludeIsNotRecordedAndItsLineStillCounts(@TempDir Path dir) throws IOException {
+    String hook = "{\"type\":\"attachment\",\"attachment\":{\"type\":\"hook_success\",\"stdout\":\"ok\"}}";
+    String file = "{\"type\":\"attachment\",\"attachment\":{\"type\":\"file\",\"content\":\"a file\"}}";
+    Path transcript = dir.resolve(SESSION + ".jsonl");
+    Files.writeString(transcript, String.join("\n", PROMPT, hook, ANSWER, hook, file, RESULT) + "\n");
+
+    try (RecordStore store = store(dir)) {
+      Ingester ingester =
+          new Ingester(
+              store, Redactor.standard(), Syncer.NONE, true, "host-1",
+              java.util.Set.of("context/hook_success", "thinking", "no-such-kind"));
+      assertEquals(6, ingester.ingestSession(transcript, SESSION, ALICE).lines());
+
+      List<MessageRecord> messages = store.messages(SESSION);
+      assertEquals(
+          List.of("user_prompt", "assistant_text", "tool_use", "context", "tool_result"),
+          messages.stream().map(MessageRecord::kind).toList());
+      assertEquals("file", messages.get(3).subtype(), "another subtype of the same kind is kept");
+      assertEquals(3, messages.get(1).lineNo(), "a record keeps the place its line has in the file");
+      assertEquals(10L, messages.get(1).inputTokens(), "the usage moves to the first block that is recorded");
+      assertEquals(0, ingester.ingestSession(transcript, SESSION, ALICE).lines());
+    }
+  }
+
+  @Test
   void contentIsChunkedBelowTheSmallestBlobLimit() {
     StringBuilder text = new StringBuilder();
     java.util.Random random = new java.util.Random(7);

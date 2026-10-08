@@ -450,12 +450,15 @@ public final class Main {
 
   private Ingester ingester(RecordStore store, String hostId) throws IOException {
     JsonNode settings = settings();
+    Set<String> excluded = new java.util.HashSet<>();
+    settings.path("exclude").forEach(entry -> excluded.add(entry.asText()));
     return new Ingester(
         store,
         settings.path("redact").asBoolean(true) ? Redactor.standard() : Redactor.NONE,
         Syncer.NONE,
         settings.path("recordThinking").asBoolean(true),
-        hostId);
+        hostId,
+        excluded);
   }
 
   // ---- read commands --------------------------------------------------------------------------

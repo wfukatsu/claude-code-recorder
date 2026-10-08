@@ -81,6 +81,7 @@ test('the hook queues the session and keeps the account it started with', async 
     assert.equal(await runHook(event('SessionStart')), 0);
     assert.equal(queued().account.account_id, 'acct-1');
     assert.equal(queued().ended, false);
+    assert.equal(queued().last_event, 'SessionStart');
 
     // The login changes mid-session; the session stays with the account that started it.
     fs.writeFileSync(path.join(config, '.claude.json'), JSON.stringify({ oauthAccount: { accountUuid: 'acct-2' } }));
