@@ -48,6 +48,10 @@ Deleting
   ccrec delete --before <yyyy-mm-dd> | --older-than <n>d  [--dry-run] [--account <id>]
                                  … your sessions with no activity since then; --dry-run lists them
 
+Other
+  ccrec version                  the installed version
+  ccrec help                     this text
+
 Environment
   CCREC_HOME        data directory (default ~/.ccrec)
   CCREC_ACCOUNT_ID  account id set by an administrator; overrides the Claude login
@@ -55,6 +59,10 @@ Environment
   CCREC_DISABLE=1   record nothing
   CCREC_JAVA        the java executable to use (default: JAVA_HOME, then PATH)
 `;
+
+function packageVersion() {
+  return JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version;
+}
 
 function settingsTarget(args) {
   const explicit = args.indexOf('--settings');
@@ -115,6 +123,11 @@ export async function main(args) {
     case '-h':
       console.log(HELP);
       return 0;
+    case 'version':
+    case '--version':
+    case '-v':
+      console.log(packageVersion());
+      return 0;
     case 'hook':
       return runHook();
     case 'init':
@@ -141,7 +154,7 @@ export async function main(args) {
     case 'ui':
       // What only this side knows, for the status page.
       return runUi(ensureHome(), rest, resolveIdentity(), {
-        version: JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
+        version: packageVersion(),
         hooksInstalled: hooksInstalled(userSettingsPath()),
         settingsPath: userSettingsPath(),
       });
