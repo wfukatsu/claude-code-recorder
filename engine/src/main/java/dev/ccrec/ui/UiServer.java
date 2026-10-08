@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.ccrec.cli.SessionSummary;
+import dev.ccrec.cli.SpoolQueue;
 import dev.ccrec.model.Account;
 import dev.ccrec.model.MessageRecord;
 import dev.ccrec.model.SessionRecord;
@@ -19,6 +20,8 @@ import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -47,6 +50,7 @@ public final class UiServer implements AutoCloseable {
   private static final int MAX_SESSIONS = 1000;
   /** What a list row shows of a record's text; the whole text is fetched when the row is opened. */
   private static final int LISTED_CHARS = 300;
+  private static final int LOG_LINES = 60;
 
   private static final Map<String, String> STATIC =
       Map.of(
@@ -62,6 +66,9 @@ public final class UiServer implements AutoCloseable {
   private final RecordStore store;
   private final String currentAccountId;
   private final String token;
+  private final Path home;
+  private final Path config;
+  private final JsonNode launcher;
   private final HttpServer server;
   private final ExecutorService workers = Executors.newFixedThreadPool(4);
 
@@ -70,9 +77,23 @@ public final class UiServer implements AutoCloseable {
    * @param port the port to listen on, or 0 for any free one
    */
   public UiServer(RecordStore store, String currentAccountId, int port, String token) throws IOException {
+    this(store, currentAccountId, port, token, null, null, JSON.createObjectNode());
+  }
+
+  /**
+   * @param home the recorder's home, whose queue, log and settings the status page shows; may be null
+   * @param config the ScalarDB configuration in use; may be null
+   * @param launcher what the launcher says of itself: its version, whether the hooks are installed
+   */
+  public UiServer(
+      RecordStore store, String currentAccountId, int port, String token, Path home, Path config, JsonNode launcher)
+      throws IOException {
     this.store = store;
     this.currentAccountId = currentAccountId;
     this.token = token;
+    this.home = home;
+    this.config = config;
+    this.launcher = launcher;
     this.server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), port), 0);
     server.createContext("/", this::handle);
     server.setExecutor(workers);
@@ -190,6 +211,8 @@ public final class UiServer implements AutoCloseable {
     String[] parts = Arrays.stream(path.split("/")).map(UiServer::decode).toArray(String[]::new);
     if (path.equals("accounts")) {
       json(exchange, 200, accounts());
+    } else if (path.equals("status")) {
+      json(exchange, 200, status());
     } else if (path.equals("sessions")) {
       json(exchange, 200, sessions(query.getOrDefault("account", currentAccountId), number(query, "limit", 200, MAX_SESSIONS)));
     } else if (parts.length == 2 && parts[0].equals("sessions")) {
@@ -241,7 +264,9 @@ public final class UiServer implements AutoCloseable {
       ObjectNode node = JSON.valueToTree(session);
       long[] spent = new long[UsageRecord.COUNTERS];
       Set<String> models = new TreeSet<>();
-      for (UsageRecord usage : store.usage(session.sessionId())) {
+      List<UsageRecord> byModel = store.usage(session.sessionId());
+      node.set("usageByModel", JSON.valueToTree(byModel));
+      for (UsageRecord usage : byModel) {
         long[] counters = usage.counters();
         for (int i = 0; i < spent.length; i++) {
           spent[i] += counters[i];
@@ -255,6 +280,45 @@ public final class UiServer implements AutoCloseable {
       sessions.add(node);
     }
     return sessions;
+  }
+
+  /** What `ccrec doctor` checks, and what the hooks and the ingests have been doing. */
+  private ObjectNode status() throws IOException {
+    ObjectNode status = JSON.createObjectNode();
+    status.set("launcher", launcher);
+    status.put("java", System.getProperty("java.version"));
+    status.put("accounts", store.accounts().size());
+    if (config != null && Files.isRegularFile(config)) {
+      java.util.Properties properties = new java.util.Properties();
+      try (InputStream in = Files.newInputStream(config)) {
+        properties.load(in);
+      }
+      ObjectNode database = status.putObject("database");
+      database.put("config", config.toString());
+      database.put("storage", properties.getProperty("scalar.db.storage"));
+      // Where it records, without what it takes to get in: a JDBC URL can carry a password.
+      database.put(
+          "contactPoints",
+          String.valueOf(properties.getProperty("scalar.db.contact_points")).replaceAll("(?i)(password=)[^&;]*", "$1…").replaceAll("://[^/@]*@", "://…@"));
+    }
+    if (home != null) {
+      status.put("home", home.toString());
+      status.set("queue", JSON.valueToTree(SpoolQueue.of(home.resolve("spool"))));
+      Path settings = home.resolve("config.json");
+      if (Files.isRegularFile(settings)) {
+        try {
+          status.set("settings", JSON.readTree(Files.readString(settings)));
+        } catch (com.fasterxml.jackson.core.JsonProcessingException e) {
+          status.put("settingsError", String.valueOf(e.getOriginalMessage()));
+        }
+      }
+      Path log = home.resolve("logs").resolve("ingest.log");
+      if (Files.isRegularFile(log)) {
+        List<String> lines = Files.readAllLines(log, StandardCharsets.UTF_8);
+        status.set("ingestLog", JSON.valueToTree(lines.subList(Math.max(0, lines.size() - LOG_LINES), lines.size())));
+      }
+    }
+    return status;
   }
 
   private Optional<ObjectNode> summary(String sessionId) {

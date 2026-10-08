@@ -139,7 +139,12 @@ export async function main(args) {
     case 'doctor':
       return doctor();
     case 'ui':
-      return runUi(ensureHome(), rest, resolveIdentity());
+      // What only this side knows, for the status page.
+      return runUi(ensureHome(), rest, resolveIdentity(), {
+        version: JSON.parse(fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version,
+        hooksInstalled: hooksInstalled(userSettingsPath()),
+        settingsPath: userSettingsPath(),
+      });
     case 'ingest':
     case 'import':
     case 'sessions':

@@ -185,8 +185,16 @@ td {
   vertical-align: top;
 }
 
-tr:last-child td {
+tbody tr:last-child td,
+tbody tr:last-child th {
   border-bottom: 0;
+}
+
+/* The heading cell of a totals row reads as part of the row. */
+tbody th {
+  color: inherit;
+  font-size: inherit;
+  font-weight: 600;
 }
 
 th {
@@ -417,4 +425,85 @@ dl.facts dd {
   .record .meta {
     display: none;
   }
+}
+
+h2 {
+  font-size: 14px;
+  margin: 22px 0 8px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.note {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 6px 0 0;
+}
+
+.chart {
+  margin: 0;
+  padding: 12px 12px 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.chart > svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+.chart .axis {
+  stroke: var(--muted);
+  stroke-width: 1;
+}
+
+.chart .grid {
+  stroke: var(--line);
+  stroke-width: 1;
+}
+
+.chart .tick {
+  fill: var(--muted);
+  font-size: 11px;
+}
+
+.chart .tick.end {
+  text-anchor: end;
+}
+
+.chart .tick.middle {
+  text-anchor: middle;
+}
+
+.chart figcaption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  vertical-align: -1px;
+}
+
+td.mark {
+  font-family: var(--mono);
+  font-weight: 700;
+  width: 4em;
+  color: var(--muted);
+}
+
+td.mark.good {
+  color: var(--good);
+}
+
+td.mark.failed,
+td.failed {
+  color: var(--bad);
 }

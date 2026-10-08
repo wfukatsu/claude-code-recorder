@@ -6,6 +6,47 @@
 const TEXT = {
   ja: {
     sessions: 'セッション',
+    usageNav: '使用量',
+    statusNav: '状態',
+    metric: '指標',
+    metricOutput: '出力トークン',
+    metricInput: '入力トークン（キャッシュ含む）',
+    metricMessages: 'API 応答数',
+    byDay: '日ごと（モデル別）',
+    byModel: 'モデル別',
+    byProject: 'プロジェクト別',
+    byStartDay: 'セッションの使用量は、そのセッションを開始した日にまとめて計上しています。',
+    noUsage: 'この期間の使用量はありません。',
+    noProject: '(プロジェクトなし)',
+    refresh: '更新',
+    checks: '確認',
+    checkHooks: 'フックが入っている',
+    checkQueue: 'キューのセッションが記録されている',
+    checkReadable: 'キューが読める',
+    noneWaiting: '未記録なし',
+    waitingSince: (n, since) => `${n} 件が未記録（${since} から）`,
+    unreadable: (n) => `読めないキューが ${n} 件`,
+    unknown: '不明（ccrec ui から起動していない）',
+    environment: '環境',
+    version: 'ccrec',
+    javaVersion: 'Java',
+    homeDir: 'データの場所',
+    databaseConfig: 'データベース設定',
+    storage: '保存先',
+    accountsRecorded: '記録のあるアカウント',
+    settings: '設定 (config.json)',
+    queue: 'フックが保持しているセッション',
+    noQueue: 'フックが保持しているセッションはありません。',
+    lastEvent: '最後のイベント',
+    updated: '更新',
+    requested: '取り込みの要求',
+    recorded: '最後の取り込み',
+    state: '状態',
+    stateWaiting: '未記録',
+    stateRecorded: '記録済み',
+    stateIdle: '要求なし',
+    ingestLog: '取り込みログ（末尾）',
+    noLog: 'まだ取り込みは起動していません。',
     account: 'アカウント',
     language: 'English',
     period: '期間',
@@ -119,6 +160,47 @@ const TEXT = {
   },
   en: {
     sessions: 'Sessions',
+    usageNav: 'Usage',
+    statusNav: 'Status',
+    metric: 'Metric',
+    metricOutput: 'Output tokens',
+    metricInput: 'Input tokens (with cache)',
+    metricMessages: 'API messages',
+    byDay: 'Per day, by model',
+    byModel: 'By model',
+    byProject: 'By project',
+    byStartDay: 'A session\'s usage is counted on the day the session started.',
+    noUsage: 'No usage in this period.',
+    noProject: '(no project)',
+    refresh: 'Refresh',
+    checks: 'Checks',
+    checkHooks: 'Hooks installed',
+    checkQueue: 'Queued sessions recorded',
+    checkReadable: 'Queue entries readable',
+    noneWaiting: 'none waiting',
+    waitingSince: (n, since) => `${n} waiting since ${since}`,
+    unreadable: (n) => `${n} unreadable`,
+    unknown: 'unknown (not started by ccrec ui)',
+    environment: 'Environment',
+    version: 'ccrec',
+    javaVersion: 'Java',
+    homeDir: 'Data directory',
+    databaseConfig: 'Database configuration',
+    storage: 'Storage',
+    accountsRecorded: 'Accounts with recordings',
+    settings: 'Settings (config.json)',
+    queue: 'Sessions the hooks hold',
+    noQueue: 'The hooks hold no session.',
+    lastEvent: 'Last event',
+    updated: 'Updated',
+    requested: 'Ingest asked',
+    recorded: 'Last ingest',
+    state: 'State',
+    stateWaiting: 'waiting',
+    stateRecorded: 'recorded',
+    stateIdle: 'not asked',
+    ingestLog: 'Ingest log (tail)',
+    noLog: 'No ingest has been started yet.',
     account: 'Account',
     language: '日本語',
     period: 'Period',
@@ -340,7 +422,14 @@ const shortModel = (model) => model.replace(/^claude-/, '');
 function drawFrame() {
   document.documentElement.lang = state.lang;
   const nav = document.getElementById('nav');
-  nav.replaceChildren(el('a', { href: '#/sessions', class: 'current' }, t('sessions')));
+  const here = location.hash.replace(/^#\/?/, '').split('/')[0] || 'sessions';
+  nav.replaceChildren(
+    ...[
+      ['sessions', 'sessions'],
+      ['usage', 'usageNav'],
+      ['status', 'statusNav'],
+    ].map(([route, label]) => el('a', { href: `#/${route}`, class: here === route ? 'current' : '' }, t(label))),
+  );
   document.getElementById('account-label').textContent = t('account');
   const language = document.getElementById('language');
   language.textContent = t('language');
@@ -362,7 +451,8 @@ function drawFrame() {
   select.onchange = () => {
     state.account = select.value;
     remember('account', state.account);
-    location.hash = '#/sessions';
+    // A session belongs to one account: its page makes no sense under another. Other pages stay.
+    if (location.hash.startsWith('#/sessions/')) location.hash = '#/sessions';
     draw();
   };
 }
@@ -374,6 +464,8 @@ async function draw() {
   const route = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
   try {
     if (route[0] === 'sessions' && route[1]) await drawSession(view, route[1], turn);
+    else if (route[0] === 'usage') await drawUsage(view, turn);
+    else if (route[0] === 'status') await drawStatus(view, turn);
     else await drawSessions(view, turn);
   } catch (error) {
     if (turn !== state.drawn) return;
@@ -853,6 +945,275 @@ function pretty(record, text) {
   } catch {
     return text;
   }
+}
+
+// ---- usage over time ---------------------------------------------------------------------------
+
+const usageView = { days: remembered('usageDays', '30'), metric: remembered('usageMetric', 'metricOutput') };
+const METRICS = {
+  metricOutput: (u) => u.outputTokens,
+  metricInput: (u) => u.inputTokens + u.cacheReadTokens + u.cacheCreationTokens,
+  metricMessages: (u) => u.messages,
+};
+// Told apart by lightness as well as hue, for whoever does not see the hues.
+const SERIES = ['#b4532a', '#2f6f8f', '#8a7a1f', '#6b4f9a', '#3f8a5f', '#9a9a9a'];
+
+const dayKey = (millis) => {
+  const date = new Date(millis);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
+
+async function drawUsage(view, turn) {
+  if (state.accounts.length === 0) {
+    view.replaceChildren(el('p', { class: 'empty' }, t('noAccounts')));
+    return;
+  }
+  view.replaceChildren(el('p', { class: 'empty' }, t('loading')));
+  const sessions = await api(`sessions?account=${encodeURIComponent(state.account)}&limit=1000`);
+  if (turn !== state.drawn) return;
+  const body = el('div');
+
+  const fill = () => {
+    const days = Number(usageView.days);
+    const measure = METRICS[usageView.metric];
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const keys = [];
+    for (let back = days - 1; back >= 0; back--) keys.push(dayKey(today.getTime() - back * 86400000 + 43200000));
+    const shown = sessions.filter((s) => keys.includes(dayKey(s.startedAt)));
+
+    const perModel = new Map();
+    const perProject = new Map();
+    const perDay = new Map(keys.map((key) => [key, new Map()]));
+    for (const s of shown) {
+      const project = perProject.get(s.projectPath ?? '') ?? { sessions: 0, messages: 0, output: 0, cost: null };
+      project.sessions += 1;
+      if (s.costUsd !== null) project.cost = (project.cost ?? 0) + s.costUsd;
+      for (const u of s.usageByModel) {
+        const model = perModel.get(u.model) ?? { messages: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, thinkingTokens: 0, webSearchRequests: 0, webFetchRequests: 0 };
+        for (const field of Object.keys(model)) model[field] += u[field];
+        perModel.set(u.model, model);
+        project.messages += u.messages;
+        project.output += u.outputTokens;
+        const day = perDay.get(dayKey(s.startedAt));
+        day.set(u.model, (day.get(u.model) ?? 0) + measure(u));
+      }
+      perProject.set(s.projectPath ?? '', project);
+    }
+    const models = [...perModel.keys()].sort((a, b) => measure(perModel.get(b)) - measure(perModel.get(a)));
+    const total = models.reduce((sum, model) => sum + measure(perModel.get(model)), 0);
+    const costs = shown.filter((s) => s.costUsd !== null);
+    if (shown.length === 0 || models.length === 0) {
+      body.replaceChildren(el('p', { class: 'empty' }, t('noUsage')));
+      return;
+    }
+    body.replaceChildren(
+      el(
+        'div',
+        { class: 'stats' },
+        stat(whole(shown.length), t('sessions')),
+        stat(compact(total), t(usageView.metric)),
+        stat(costs.length ? money(costs.reduce((sum, s) => sum + s.costUsd, 0)) : '–', t('cost')),
+      ),
+      el('h2', {}, t('byDay')),
+      chart(keys, perDay, models),
+      el('p', { class: 'note' }, t('byStartDay')),
+      el('h2', {}, t('byModel')),
+      usageTable(models.map((model) => ({ model, ...perModel.get(model) }))),
+      el('h2', {}, t('byProject')),
+      el(
+        'div',
+        { class: 'scroll' },
+        el(
+          'table',
+          {},
+          el(
+            'thead',
+            {},
+            el('tr', {}, el('th', {}, t('project')), el('th', { class: 'num' }, t('sessions')), el('th', { class: 'num' }, t('responses')), el('th', { class: 'num' }, t('output')), el('th', { class: 'num' }, t('cost'))),
+          ),
+          el(
+            'tbody',
+            {},
+            [...perProject.entries()]
+              .sort((a, b) => b[1].output - a[1].output)
+              .map(([path, p]) =>
+                el(
+                  'tr',
+                  {},
+                  el('td', { title: path }, baseName(path) || t('noProject')),
+                  el('td', { class: 'num' }, whole(p.sessions)),
+                  el('td', { class: 'num' }, whole(p.messages)),
+                  el('td', { class: 'num' }, compact(p.output)),
+                  el('td', { class: 'num' }, money(p.cost)),
+                ),
+              ),
+          ),
+        ),
+      ),
+    );
+  };
+
+  const pick = (key, options, label) =>
+    el(
+      'label',
+      { class: 'control' },
+      `${label} `,
+      el(
+        'select',
+        {
+          onchange: (event) => {
+            usageView[key] = event.target.value;
+            remember(key === 'days' ? 'usageDays' : 'usageMetric', usageView[key]);
+            fill();
+          },
+        },
+        options.map(([value, text]) => el('option', { value, selected: usageView[key] === value }, text)),
+      ),
+    );
+  view.replaceChildren(
+    el(
+      'div',
+      { class: 'filters' },
+      pick('days', ['7', '30', '90'].map((n) => [n, t('days', n)]), t('period')),
+      pick('metric', Object.keys(METRICS).map((name) => [name, t(name)]), t('metric')),
+    ),
+    body,
+  );
+  fill();
+}
+
+function svg(tag, attributes, ...children) {
+  const node = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [name, value] of Object.entries(attributes || {})) node.setAttribute(name, value);
+  for (const child of children.flat()) if (child) node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  return node;
+}
+
+/** Stacked bars, a day each; every segment says what it is to a pointer and to a screen reader. */
+function chart(keys, perDay, models) {
+  const width = 960;
+  const height = 240;
+  const left = 56;
+  const bottom = 24;
+  const top = 8;
+  const colorOf = (model) => SERIES[Math.min(models.indexOf(model), SERIES.length - 1)];
+  const totals = keys.map((key) => [...perDay.get(key).values()].reduce((sum, value) => sum + value, 0));
+  const most = Math.max(1, ...totals);
+  const step = (width - left) / keys.length;
+  const bar = Math.max(2, Math.min(28, step - 3));
+  const scale = (value) => (value / most) * (height - bottom - top);
+  const every = Math.ceil(keys.length / 10);
+  const parts = [
+    svg('line', { x1: left, y1: height - bottom, x2: width, y2: height - bottom, class: 'axis' }),
+    svg('line', { x1: left, y1: top, x2: width, y2: top, class: 'grid' }),
+    svg('text', { x: left - 6, y: top + 4, class: 'tick end' }, compact(most)),
+    svg('text', { x: left - 6, y: height - bottom, class: 'tick end' }, '0'),
+  ];
+  keys.forEach((key, index) => {
+    const x = left + index * step + (step - bar) / 2;
+    let y = height - bottom;
+    for (const model of models) {
+      const value = perDay.get(key).get(model) ?? 0;
+      if (value === 0) continue;
+      const tall = Math.max(1, scale(value));
+      y -= tall;
+      parts.push(svg('rect', { x, y, width: bar, height: tall, fill: colorOf(model) }, svg('title', {}, `${key}  ${model}  ${whole(value)}`)));
+    }
+    if (index % every === 0) parts.push(svg('text', { x: x + bar / 2, y: height - 6, class: 'tick middle' }, key.slice(5).replace('-', '/')));
+  });
+  return el(
+    'figure',
+    { class: 'chart' },
+    svg('svg', { viewBox: `0 0 ${width} ${height}`, role: 'img' }, parts),
+    el(
+      'figcaption',
+      {},
+      models.map((model) => {
+        const swatch = svg('svg', { viewBox: '0 0 10 10', class: 'swatch' }, svg('rect', { width: 10, height: 10, fill: colorOf(model) }));
+        return el('span', { class: 'key' }, swatch, ` ${model}`);
+      }),
+    ),
+  );
+}
+
+// ---- status ----------------------------------------------------------------------------------
+
+async function drawStatus(view, turn) {
+  view.replaceChildren(el('p', { class: 'empty' }, t('loading')));
+  const status = await api('status');
+  if (turn !== state.drawn) return;
+  const queue = status.queue ?? { waiting: 0, unreadable: 0, entries: [], oldestWaiting: null };
+  const hooks = status.launcher?.hooksInstalled;
+  // As `ccrec doctor` has it: an ingest takes seconds, so one asked for ten minutes ago is not coming.
+  const stuck = queue.waiting > 0 && Date.now() - Date.parse(queue.oldestWaiting) > 10 * 60 * 1000;
+  const check = (ok, name, detail) =>
+    el('tr', {}, el('td', { class: ok === null ? 'mark' : ok ? 'mark good' : 'mark failed' }, ok === null ? '?' : ok ? 'ok' : 'FAIL'), el('td', {}, name), el('td', { class: 'project' }, detail));
+  const stateOf = (entry) => (entry.waiting ? t('stateWaiting') : entry.recordedAt ? t('stateRecorded') : t('stateIdle'));
+  const time = (iso) => (iso ? when(Date.parse(iso), true) : '–');
+  const fact = (label, value) => (value === undefined || value === null ? [] : [el('dt', {}, label), el('dd', {}, value)]);
+
+  view.replaceChildren(
+    el('div', { class: 'filters' }, el('button', { type: 'button', onclick: () => draw() }, t('refresh'))),
+    el('h2', {}, t('checks')),
+    el(
+      'div',
+      { class: 'scroll' },
+      el(
+        'table',
+        {},
+        el(
+          'tbody',
+          {},
+          check(hooks === undefined ? null : hooks, t('checkHooks'), hooks === undefined ? t('unknown') : (status.launcher.settingsPath ?? '')),
+          check(!stuck, t('checkQueue'), queue.waiting === 0 ? t('noneWaiting') : t('waitingSince', queue.waiting, time(queue.oldestWaiting))),
+          check(queue.unreadable === 0, t('checkReadable'), queue.unreadable === 0 ? '' : t('unreadable', queue.unreadable)),
+        ),
+      ),
+    ),
+    el('h2', {}, t('environment')),
+    el(
+      'dl',
+      { class: 'facts' },
+      fact(t('version'), status.launcher?.version),
+      fact(t('javaVersion'), status.java),
+      fact(t('homeDir'), status.home),
+      fact(t('databaseConfig'), status.database?.config),
+      fact(t('storage'), status.database && `${status.database.storage} · ${status.database.contactPoints}`),
+      fact(t('accountsRecorded'), whole(status.accounts)),
+      fact(t('settings'), status.settings ? JSON.stringify(status.settings) : status.settingsError),
+    ),
+    el('h2', {}, t('queue')),
+    queue.entries.length === 0
+      ? el('p', { class: 'empty' }, t('noQueue'))
+      : el(
+          'div',
+          { class: 'scroll' },
+          el(
+            'table',
+            {},
+            el('thead', {}, el('tr', {}, [t('sessions'), t('lastEvent'), t('updated'), t('requested'), t('recorded'), t('state')].map((label) => el('th', {}, label)))),
+            el(
+              'tbody',
+              {},
+              queue.entries.map((entry) =>
+                el(
+                  'tr',
+                  {},
+                  el('td', {}, el('a', { href: `#/sessions/${encodeURIComponent(entry.sessionId)}` }, entry.sessionId)),
+                  el('td', {}, entry.lastEvent ?? '–'),
+                  el('td', { class: 'when' }, time(entry.updatedAt)),
+                  el('td', { class: 'when' }, time(entry.ingestRequestedAt)),
+                  el('td', { class: 'when' }, time(entry.recordedAt)),
+                  el('td', { class: entry.waiting ? 'failed' : '' }, stateOf(entry)),
+                ),
+              ),
+            ),
+          ),
+        ),
+    el('h2', {}, t('ingestLog')),
+    status.ingestLog && status.ingestLog.length ? el('pre', {}, status.ingestLog.join('\n')) : el('p', { class: 'empty' }, t('noLog')),
+  );
 }
 
 // ---- start -------------------------------------------------------------------------------------
