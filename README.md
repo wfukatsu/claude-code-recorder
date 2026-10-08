@@ -31,7 +31,7 @@ Get the package from the GitHub release and install it with `npm install`. The p
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.0.0.tgz
+npm install -g ./claude-code-recorder-1.1.0.tgz
 ```
 
 It can also be installed straight from the repository. The engine is then built during the install, which needs JDK 17 or later and a network connection.
