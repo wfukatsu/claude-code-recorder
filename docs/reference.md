@@ -22,6 +22,7 @@ Claude Code ─ hooks (SessionStart / Stop / SubagentStop / SessionEnd) ─▶ ~
 - A session whose ingest did not run or did not finish (Java not found, the wait for the lock timed out) is recorded together with the next session whose hook fires. When a session has gone unrecorded for more than 10 minutes, `ccrec doctor` reports `FAIL`; `ccrec ingest` records it.
 - One queue entry that cannot be ingested does not hold back the others. An unreadable entry is set aside as `spool/*.json.bad`.
 - A session an ingest was asked for whose transcript cannot be found stays unrecorded and shows in `ccrec doctor`. After 30 days without the transcript it is dropped from the queue.
+- A session that ended without a transcript — opened and closed with nothing said, for which Claude Code writes none — has nothing to record and leaves the queue at once.
 - The transcript format is internal to Claude Code and changes between versions. A record of a kind this tool does not know, or of a known kind in an unexpected shape, is kept whole as `unknown`. A `system` record without content (a turn's duration, say) is kept whole too. Only session bookkeeping (a change of mode, for instance) and empty blocks are not kept.
 - A transcript is read a line at a time, so a first import of a large file does not grow in memory.
 

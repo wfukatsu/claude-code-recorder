@@ -149,7 +149,11 @@ class MainTest {
     Path home = home(dir);
     Path spool = home.resolve("spool");
     String now = Instant.now().toString();
-    queue(home, "moved", dir.resolve("moved.jsonl"), true, now);
+    // Still open, an ingest asked for, and no transcript where the hook said it would be.
+    queue(home, "moved", dir.resolve("moved.jsonl"), false, now);
+    // Opened and closed with nothing said: Claude Code writes no transcript for such a session.
+    queue(home, "silent", dir.resolve("silent.jsonl"), true, now);
+    Files.createFile(spool.resolve("silent.done"));
     // Only started: its transcript may simply not have been written yet.
     queue(home, "fresh", dir.resolve("fresh.jsonl"), false, null);
     queue(home, "lost", dir.resolve("lost.jsonl"), false, now);
@@ -159,6 +163,8 @@ class MainTest {
 
     assertTrue(Files.exists(spool.resolve("moved.json")), "it stays waiting");
     assertFalse(Files.exists(spool.resolve("moved.done")));
+    assertFalse(Files.exists(spool.resolve("silent.json")), "nothing will ever come of it: it leaves the queue");
+    assertFalse(Files.exists(spool.resolve("silent.done")));
     assertTrue(Files.exists(spool.resolve("fresh.json")));
     assertFalse(Files.exists(spool.resolve("lost.json")), "but not for ever");
 
