@@ -37,7 +37,7 @@ Get the package (`.tgz`) from the GitHub release and install it with `npm instal
 
 ```bash
 gh release download --repo wfukatsu/claude-code-recorder --pattern '*.tgz'
-npm install -g ./claude-code-recorder-1.2.0.tgz
+npm install -g ./claude-code-recorder-1.2.1.tgz
 ccrec version
 ```
 
