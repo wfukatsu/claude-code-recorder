@@ -426,8 +426,8 @@ public final class UiServer implements AutoCloseable {
   }
 
   /**
-   * A page of a session's records in source order — or, with {@code order=desc}, from the last one
-   * back — optionally of some kinds and one agent only. The
+   * A page of a session's records in the order they happened — or, with {@code order=desc}, from the
+   * latest back — optionally of some kinds and one agent only. The
    * text is its beginning; {@code whole} says whether that is all of it.
    */
   private ObjectNode records(String sessionId, Map<String, String> query) {
@@ -436,12 +436,13 @@ public final class UiServer implements AutoCloseable {
     int offset = number(query, "offset", 0, Integer.MAX_VALUE);
     int limit = number(query, "limit", PAGE_RECORDS, PAGE_RECORDS);
     List<MessageRecord> matching = new java.util.ArrayList<>();
-    List<MessageRecord> all = store.messages(sessionId);
+    List<MessageRecord> all = inTimeOrder(store.messages(sessionId));
     if ("1".equals(query.get("network"))) {
       // Only the calls that reach beyond this machine and Claude, each with what came back.
       String host = query.get("host");
       Set<String> categories = query.containsKey("categories") ? Set.of(query.get("categories").split(",")) : null;
       Set<String> localMcp = localMcpServers();
+      Set<MessageRecord> reaching = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
       Set<String> calls = new java.util.HashSet<>();
       for (MessageRecord m : all) {
         if (m.kind().equals("tool_use") && (agent == null || agent.equals(m.agentId()))) {
@@ -449,12 +450,16 @@ public final class UiServer implements AutoCloseable {
           if (use.isPresent()
               && (host == null || use.get().hosts().contains(host))
               && (categories == null || categories.contains(use.get().category()))) {
-            matching.add(m);
+            reaching.add(m);
             if (m.toolUseId() != null) {
               calls.add(m.toolUseId());
             }
           }
-        } else if ((m.kind().equals("tool_result") || m.kind().equals("mcp_meta")) && calls.contains(m.toolUseId())) {
+        }
+      }
+      for (MessageRecord m : all) {
+        if (reaching.contains(m)
+            || (m.kind().equals("tool_result") || m.kind().equals("mcp_meta")) && calls.contains(m.toolUseId())) {
           matching.add(m);
         }
       }
@@ -504,6 +509,41 @@ public final class UiServer implements AutoCloseable {
     page.put("offset", offset);
     page.put("total", matching.size());
     return page;
+  }
+
+  /**
+   * A session's records in the order they happened, a sub-agent's among the main thread's where it
+   * ran. The store gives the main thread first and each sub-agent after it, which read backwards
+   * put a sub-agent's hours-old records at the top as if they were the latest.
+   *
+   * <p>A record without a time of its own takes the time of what precedes it in its transcript (or,
+   * at the very start, of what follows), and within one transcript the order of the lines is kept
+   * whatever their times say.
+   */
+  static List<MessageRecord> inTimeOrder(List<MessageRecord> records) {
+    Map<String, Long> first = new HashMap<>();
+    for (MessageRecord m : records) {
+      if (m.ts() != null) {
+        first.putIfAbsent(m.agentId(), m.ts());
+      }
+    }
+    Map<String, Long> latest = new HashMap<>();
+    long[] at = new long[records.size()];
+    Integer[] order = new Integer[records.size()];
+    for (int i = 0; i < records.size(); i++) {
+      MessageRecord m = records.get(i);
+      long before = latest.getOrDefault(m.agentId(), first.getOrDefault(m.agentId(), 0L));
+      at[i] = m.ts() == null ? before : Math.max(before, m.ts());
+      latest.put(m.agentId(), at[i]);
+      order[i] = i;
+    }
+    // Stable, and the store's order breaks a tie: the main thread before a sub-agent.
+    java.util.Arrays.sort(order, java.util.Comparator.comparingLong(i -> at[i]));
+    List<MessageRecord> sorted = new java.util.ArrayList<>(records.size());
+    for (int i : order) {
+      sorted.add(records.get(i));
+    }
+    return sorted;
   }
 
   // ---- what reaches beyond this machine ----------------------------------------------------
