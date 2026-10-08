@@ -20,6 +20,20 @@ const TEXT = {
     deletedNotice: (n) => `${n} 件のセッションを削除しました。`,
     deleteFailed: '削除できませんでした',
     busy: 'ほかの ccrec の処理が書き込み中です。少し待ってからやり直してください。',
+    network: '外部通信',
+    networkNote:
+      'この端末と Claude 以外に届いたツール呼び出しです。送信した内容は呼び出しの入力、返ってきた内容はその結果です。通信そのものを記録したものではなく、ツール名、宛先のアドレス、シェルコマンドで動かしたプログラムから判定しています。',
+    noNetwork: 'このセッションには、外部に届いたツール呼び出しがありません。',
+    networkCalls: '呼び出し',
+    networkTag: 'この端末と Claude 以外への通信',
+    destination: '送信先',
+    via: '経路',
+    via_web: 'Web',
+    via_shell: 'シェル',
+    via_mcp: 'MCP',
+    sent: '送信',
+    received: '受信',
+    lastAt: '最後',
     order: '並び順',
     newestFirst: '新しい順',
     oldestFirst: '古い順',
@@ -202,6 +216,20 @@ const TEXT = {
     deletedNotice: (n) => (n === 1 ? '1 session was deleted.' : `${n} sessions were deleted.`),
     deleteFailed: 'Could not delete',
     busy: 'Another ccrec process is writing. Wait a moment and try again.',
+    network: 'Network',
+    networkNote:
+      'Tool calls that reached beyond this machine and Claude. What was sent is the call\'s input; what came back is its result. This is not captured traffic: it is told from the tool, the addresses it names and the programs a shell command runs.',
+    noNetwork: 'No tool call of this session reached beyond this machine.',
+    networkCalls: 'Calls',
+    networkTag: 'Reaches beyond this machine and Claude',
+    destination: 'Destination',
+    via: 'Via',
+    via_web: 'Web',
+    via_shell: 'Shell',
+    via_mcp: 'MCP',
+    sent: 'Sent',
+    received: 'Received',
+    lastAt: 'Last',
     order: 'Order',
     newestFirst: 'Newest first',
     oldestFirst: 'Oldest first',
@@ -839,7 +867,7 @@ async function drawSession(view, sessionId, turn) {
   const tabs = el('div', { class: 'tabs' });
   const showTab = () => {
     tabs.replaceChildren(
-      ...['conversation', 'usage', 'tools', 'details'].map((name) =>
+      ...['conversation', 'network', 'usage', 'tools', 'details'].map((name) =>
         el(
           'button',
           {
@@ -857,6 +885,11 @@ async function drawSession(view, sessionId, turn) {
     if (sessionView.tab === 'usage') panel.replaceChildren(usageTable(summary.usage));
     else if (sessionView.tab === 'tools') panel.replaceChildren(toolsTable(summary.tools));
     else if (sessionView.tab === 'details') panel.replaceChildren(facts(summary));
+    else if (sessionView.tab === 'network') {
+      network(panel, sessionId, () => turn === state.drawn && sessionView.tab === 'network').catch((error) =>
+        panel.replaceChildren(el('p', { class: 'error' }, `${t('loadFailed')}: ${error.message}`)),
+      );
+    }
     else conversation(panel, sessionId, summary);
   };
 
@@ -995,11 +1028,12 @@ function facts(summary) {
 
 // ---- the conversation ------------------------------------------------------------------------
 
-function conversation(panel, sessionId, summary) {
-  const known = new Set(Object.values(GROUPS).flat());
-  const kindsOf = (group) =>
-    group === 'groupSystem' ? [...GROUPS.groupSystem, ...Object.keys(summary.kinds).filter((kind) => !known.has(kind))] : GROUPS[group];
-  const countOf = (group) => kindsOf(group).reduce((total, kind) => total + (summary.kinds[kind] ?? 0), 0);
+/**
+ * A list of a session's records that loads a page at a time. `queryOf` gives the query for the
+ * records wanted, without the offset, or null when there is nothing to ask for. A tool call and
+ * what came back for it are one row, in whichever order they arrive.
+ */
+function recordFeed(sessionId, queryOf) {
   const list = el('div');
   const more = el('button', { type: 'button', class: 'more' });
   let loaded = 0;
@@ -1008,6 +1042,7 @@ function conversation(panel, sessionId, summary) {
   let callsShown = new Map();
   // Newest first, a result comes before its call: it waits here for it.
   let resultsWaiting = new Map();
+  const showFailure = (error) => list.append(el('p', { class: 'error' }, `${t('loadFailed')}: ${error.message}`));
 
   const load = async (fresh) => {
     const mine = fresh ? ++run : run;
@@ -1018,14 +1053,13 @@ function conversation(panel, sessionId, summary) {
       list.replaceChildren(el('p', { class: 'empty' }, t('loading')));
     }
     more.hidden = true;
-    const kinds = [...sessionView.groups].flatMap(kindsOf);
-    if (kinds.length === 0) {
+    const wanted = queryOf();
+    if (wanted === null) {
       list.replaceChildren(el('p', { class: 'empty' }, t('noRecords')));
       return;
     }
-    const newestFirst = sessionView.order === 'desc';
-    const query = new URLSearchParams({ kinds: kinds.join(','), offset: String(loaded), order: sessionView.order });
-    if (sessionView.agent) query.set('agent', sessionView.agent);
+    const newestFirst = wanted.order === 'desc';
+    const query = new URLSearchParams({ ...wanted, offset: String(loaded) });
     const page = await api(`sessions/${encodeURIComponent(sessionId)}/records?${query}`);
     if (mine !== run) return;
     if (fresh) list.replaceChildren();
@@ -1059,7 +1093,43 @@ function conversation(panel, sessionId, summary) {
     more.textContent = t('loadMore', loaded, page.total);
   };
   more.onclick = () => load(false).catch(showFailure);
-  const showFailure = (error) => list.append(el('p', { class: 'error' }, `${t('loadFailed')}: ${error.message}`));
+  return { list, more, reload: () => load(true).catch(showFailure) };
+}
+
+/** The selector of the order records are read in, shared by the views that list them. */
+function orderSelector(reload) {
+  return el(
+    'label',
+    {},
+    `${t('order')} `,
+    el(
+      'select',
+      {
+        onchange: (event) => {
+          sessionView.order = event.target.value;
+          remember('order', sessionView.order);
+          reload();
+        },
+      },
+      el('option', { value: 'desc', selected: sessionView.order === 'desc' }, t('newestFirst')),
+      el('option', { value: 'asc', selected: sessionView.order === 'asc' }, t('oldestFirst')),
+    ),
+  );
+}
+
+function conversation(panel, sessionId, summary) {
+  const known = new Set(Object.values(GROUPS).flat());
+  const kindsOf = (group) =>
+    group === 'groupSystem' ? [...GROUPS.groupSystem, ...Object.keys(summary.kinds).filter((kind) => !known.has(kind))] : GROUPS[group];
+  const countOf = (group) => kindsOf(group).reduce((total, kind) => total + (summary.kinds[kind] ?? 0), 0);
+  if (!summary.agents.includes(sessionView.agent)) sessionView.agent = '';
+  const feed = recordFeed(sessionId, () => {
+    const kinds = [...sessionView.groups].flatMap(kindsOf);
+    if (kinds.length === 0) return null;
+    return { kinds: kinds.join(','), order: sessionView.order, ...(sessionView.agent ? { agent: sessionView.agent } : {}) };
+  });
+  const { list, more } = feed;
+  const load = () => feed.reload();
 
   const checks = el(
     'div',
@@ -1075,29 +1145,13 @@ function conversation(panel, sessionId, summary) {
           onchange: (event) => {
             if (event.target.checked) sessionView.groups.add(group);
             else sessionView.groups.delete(group);
-            load(true).catch(showFailure);
+            load();
           },
         }),
         ` ${t(group)} (${whole(countOf(group))})`,
       ),
     ),
-    el(
-      'label',
-      {},
-      `${t('order')} `,
-      el(
-        'select',
-        {
-          onchange: (event) => {
-            sessionView.order = event.target.value;
-            remember('order', sessionView.order);
-            load(true).catch(showFailure);
-          },
-        },
-        el('option', { value: 'desc', selected: sessionView.order === 'desc' }, t('newestFirst')),
-        el('option', { value: 'asc', selected: sessionView.order === 'asc' }, t('oldestFirst')),
-      ),
-    ),
+    orderSelector(load),
     summary.agents.length > 1
       ? el(
           'label',
@@ -1108,7 +1162,7 @@ function conversation(panel, sessionId, summary) {
             {
               onchange: (event) => {
                 sessionView.agent = event.target.value;
-                load(true).catch(showFailure);
+                load();
               },
             },
             el('option', { value: '' }, t('allAgents')),
@@ -1117,9 +1171,133 @@ function conversation(panel, sessionId, summary) {
         )
       : null,
   );
-  if (!summary.agents.includes(sessionView.agent)) sessionView.agent = '';
   panel.replaceChildren(checks, list, more);
-  load(true).catch(showFailure);
+  load();
+}
+
+
+// ---- what left this machine ------------------------------------------------------------------
+
+const networkView = { categories: new Set(['web', 'shell', 'mcp']), host: '' };
+
+/**
+ * The tool calls that reached beyond this machine and Claude, gathered: where they went, how much
+ * was sent and came back, and each call with its result.
+ */
+async function network(panel, sessionId, turnOf) {
+  panel.replaceChildren(el('p', { class: 'empty' }, t('loading')));
+  const summary = await api(`sessions/${encodeURIComponent(sessionId)}/network`);
+  if (!turnOf()) return;
+  if (summary.calls === 0) {
+    panel.replaceChildren(el('p', { class: 'empty' }, t('noNetwork')), el('p', { class: 'note' }, t('networkNote')));
+    return;
+  }
+  if (!summary.hosts.some((row) => row.host === networkView.host)) networkView.host = '';
+  const feed = recordFeed(sessionId, () => {
+    if (networkView.categories.size === 0) return null;
+    return {
+      network: '1',
+      order: sessionView.order,
+      categories: [...networkView.categories].join(','),
+      ...(networkView.host ? { host: networkView.host } : {}),
+    };
+  });
+  const table = el('div');
+  const showTable = () => {
+    const rows = summary.hosts.filter((row) => networkView.categories.has(row.category));
+    table.replaceChildren(
+      el(
+        'div',
+        { class: 'scroll' },
+        el(
+          'table',
+          {},
+          el(
+            'thead',
+            {},
+            el(
+              'tr',
+              {},
+              el('th', {}, t('destination')),
+              el('th', {}, t('via')),
+              el('th', { class: 'num' }, t('calls')),
+              el('th', { class: 'num' }, t('sent')),
+              el('th', { class: 'num' }, t('received')),
+              el('th', { class: 'num' }, t('errors')),
+              el('th', {}, t('lastAt')),
+            ),
+          ),
+          el(
+            'tbody',
+            {},
+            rows.map((row) =>
+              el(
+                'tr',
+                { class: networkView.host === row.host ? 'link chosen' : 'link' },
+                el(
+                  'td',
+                  {},
+                  el(
+                    'button',
+                    {
+                      type: 'button',
+                      class: 'plain',
+                      'aria-pressed': String(networkView.host === row.host),
+                      onclick: () => {
+                        networkView.host = networkView.host === row.host ? '' : row.host;
+                        showTable();
+                        feed.reload();
+                      },
+                    },
+                    row.host,
+                  ),
+                ),
+                el('td', {}, el('span', { class: `tag via-${row.category}` }, t(`via_${row.category}`))),
+                el('td', { class: 'num' }, whole(row.calls)),
+                el('td', { class: 'num' }, bytes(row.sentBytes)),
+                el('td', { class: 'num' }, bytes(row.receivedBytes)),
+                el('td', { class: row.errors ? 'num failed' : 'num' }, whole(row.errors)),
+                el('td', { class: 'when' }, row.lastAt ? when(row.lastAt) : '–'),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  };
+  const checks = el(
+    'div',
+    { class: 'checks' },
+    `${t('via')}:`,
+    ['web', 'shell', 'mcp'].map((category) =>
+      el(
+        'label',
+        {},
+        el('input', {
+          type: 'checkbox',
+          checked: networkView.categories.has(category),
+          onchange: (event) => {
+            if (event.target.checked) networkView.categories.add(category);
+            else networkView.categories.delete(category);
+            showTable();
+            feed.reload();
+          },
+        }),
+        ` ${t(`via_${category}`)} (${whole(summary.categories[category] ?? 0)})`,
+      ),
+    ),
+    orderSelector(feed.reload),
+  );
+  panel.replaceChildren(
+    el('p', { class: 'note lead' }, t('networkNote')),
+    checks,
+    table,
+    el('h2', {}, t('networkCalls')),
+    feed.list,
+    feed.more,
+  );
+  showTable();
+  feed.reload();
 }
 
 const PROSE = new Set(['user_prompt', 'assistant_text']);
@@ -1201,6 +1379,7 @@ function recordRow(record) {
       el('span', { class: 'time' }, when(record.ts, true)),
       el('span', { class: 'kind' }, label),
       el('span', { class: 'line' }, firstLine.replace(/\s+/g, ' ').trim()),
+      record.network ? el('span', { class: `tag via-${record.network.category}`, title: t('networkTag') }, `↗ ${record.network.hosts.join(', ')}`) : null,
       record.agentId !== 'main' ? el('span', { class: 'tag' }, record.agentId) : null,
       meta,
     ),

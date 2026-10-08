@@ -877,3 +877,49 @@ dialog.confirm .actions {
   gap: 8px;
   margin-top: 16px;
 }
+
+/* ---- what left this machine -------------------------------------------------------------------- */
+
+.tag.via-web {
+  background: var(--info-soft);
+  color: var(--info);
+}
+
+.tag.via-shell {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.tag.via-mcp {
+  background: var(--added);
+  color: var(--good);
+}
+
+.record > summary .tag {
+  max-width: 22em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+button.plain {
+  border: 0;
+  background: none;
+  padding: 0;
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+button.plain:hover {
+  text-decoration: underline;
+}
+
+tr.chosen {
+  background: var(--accent-soft);
+}
+
+.note.lead {
+  margin: 0 0 12px;
+  max-width: 70em;
+}

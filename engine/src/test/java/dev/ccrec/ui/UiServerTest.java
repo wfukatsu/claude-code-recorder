@@ -302,4 +302,76 @@ class UiServerTest {
       assertFalse(Files.exists(spool.resolve("never-recorded.ignored")));
     }
   }
+
+  private static String call(String id, String tool, String input) {
+    return "{\"type\":\"assistant\",\"timestamp\":\"2026-10-07T02:00:00.000Z\",\"message\":{\"id\":\"m" + id
+        + "\",\"model\":\"claude-opus-5-5\",\"content\":[{\"type\":\"tool_use\",\"id\":\"" + id + "\",\"name\":\"" + tool
+        + "\",\"input\":" + input + "}]}}";
+  }
+
+  private static String back(String id, String text, boolean failed) {
+    return "{\"type\":\"user\",\"timestamp\":\"2026-10-07T02:00:01.000Z\",\"message\":{\"role\":\"user\",\"content\":["
+        + "{\"type\":\"tool_result\",\"tool_use_id\":\"" + id + "\",\"is_error\":" + failed + ",\"content\":\"" + text + "\"}]}}";
+  }
+
+  @Test
+  void whatReachedBeyondThisMachineIsGatheredByDestination(@TempDir Path dir) throws Exception {
+    Path home = Files.createDirectories(dir.resolve("home"));
+    Files.writeString(home.resolve("config.json"), "{\"localMcpServers\":[\"serena\"]}");
+    String session = "77777777-2222-3333-4444-555555555555";
+    // A command far longer than what a record keeps at hand, with the address at its very end.
+    String longCommand = "echo " + "x".repeat(1500) + " && curl -s https://api.example.com/v1/items";
+    try (RecordStore store = store(dir)) {
+      Path transcript = dir.resolve(session + ".jsonl");
+      Files.writeString(
+          transcript,
+          String.join(
+                  "\n",
+                  call("n1", "WebFetch", "{\"url\":\"https://docs.example.com/guide\",\"prompt\":\"read\"}"),
+                  back("n1", "the guide", false),
+                  call("n2", "Bash", "{\"command\":\"" + longCommand + "\"}"),
+                  back("n2", "curl: (22) 500", true),
+                  call("n3", "Bash", "{\"command\":\"curl -s http://127.0.0.1:4127/api/status && git status\"}"),
+                  back("n3", "ok", false),
+                  call("n4", "mcp__team_wiki__search", "{\"query\":\"design\"}"),
+                  back("n4", "2 pages", false),
+                  call("n5", "mcp__serena__find_symbol", "{\"name\":\"x\"}"),
+                  back("n5", "found", false),
+                  call("n6", "Bash", "{\"command\":\"curl -s https://api.example.com/v1/other\"}"),
+                  back("n6", "{}", false))
+              + "\n");
+      new Ingester(store, Redactor.standard(), Syncer.NONE, true, "host-1")
+          .ingestSession(transcript, session, new Account("acct-alice", null, null, "org-1", null, "env"));
+
+      try (UiServer server = new UiServer(store, "acct-alice", 0, TOKEN, home, null, JSON.createObjectNode())) {
+        server.start();
+        JsonNode summary = json(server, "/api/sessions/" + session + "/network");
+        assertEquals(4, summary.path("calls").asInt(), "the local curl and the local MCP server are not among them");
+        assertEquals(2, summary.path("categories").path("shell").asInt());
+        JsonNode first = summary.path("hosts").get(0);
+        assertEquals("api.example.com", first.path("host").asText(), "the most called first");
+        assertEquals(2, first.path("calls").asInt());
+        assertEquals(1, first.path("errors").asInt());
+        assertEquals("curl: (22) 500".length() + 2, first.path("receivedBytes").asInt());
+        assertTrue(first.path("sentBytes").asInt() > 1500);
+
+        JsonNode all = json(server, "/api/sessions/" + session + "/records?network=1");
+        assertEquals(8, all.path("total").asInt(), "four calls and what came back for each");
+        assertEquals("docs.example.com", all.path("records").get(0).path("network").path("hosts").get(0).asText());
+        assertEquals("web", all.path("records").get(0).path("network").path("category").asText());
+
+        JsonNode toOne = json(server, "/api/sessions/" + session + "/records?network=1&host=api.example.com&order=desc");
+        assertEquals(4, toOne.path("total").asInt());
+        assertEquals("tool_result", toOne.path("records").get(0).path("kind").asText());
+        assertEquals(2, json(server, "/api/sessions/" + session + "/records?network=1&categories=mcp").path("total").asInt());
+
+        // In the conversation, a call that reached out says so; one that stayed here does not.
+        JsonNode calls = json(server, "/api/sessions/" + session + "/records?kinds=tool_use");
+        assertEquals(6, calls.path("total").asInt());
+        assertTrue(calls.path("records").get(1).has("network"));
+        assertFalse(calls.path("records").get(2).has("network"));
+        assertFalse(calls.path("records").get(4).has("network"));
+      }
+    }
+  }
 }
