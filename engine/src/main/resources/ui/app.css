@@ -812,6 +812,24 @@ button.danger {
   border-color: var(--bad);
 }
 
+button.primary {
+  color: #fff;
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.headline-actions {
+  display: flex;
+  gap: 8px;
+}
+
+dialog.confirm .options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0 0 12px;
+}
+
 button.danger.quiet {
   color: var(--bad);
   background: none;

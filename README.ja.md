@@ -67,6 +67,7 @@ ccrec ui              # ブラウザで見る
 | `ccrec sessions` | セッションの一覧 |
 | `ccrec show <セッション ID>` | やりとりの中身 |
 | `ccrec summary <セッション ID>` | セッションの要約（金額、所要時間、ターン、ツール、使用量） |
+| `ccrec export <セッション ID>...` | やりとりを Markdown ファイルに書き出す |
 | `ccrec usage [<セッション ID>...]` | モデル別のトークン使用量 |
 | `ccrec delete <セッション ID>...` | セッションを消す |
 | `ccrec delete --older-than <n>d [--dry-run]` | 古いセッションをまとめて消す |

@@ -269,6 +269,10 @@ Ctrl-C stops it.
 
 「更新」を押すと読み直します。
 
+### Markdown で書き出す
+
+セッション詳細の右上にある「Markdown で書き出す」を押すと、やりとりを Markdown ファイルとして保存できます。プロンプトと応答を順に並べ、サブエージェントのやりとりはその後ろに見出しを分けて載せます。ツール呼び出しとその結果、思考を含めるかどうかを選べます。どちらも、その応答の下に折りたたんで載せます。ファイル名は日付とタイトルから付けます（例: `2026-10-08_注文一覧のページングを直す_a1a1a1a1.md`）。[`ccrec export`](#markdown-で書き出す-1) でも同じファイルを書き出せます。
+
 ### 画面から削除する
 
 ![削除の確認](images/ja/ui-delete.jpg)
@@ -359,6 +363,17 @@ total      5 sessions               52        1,518      102,450          840   
 ```
 
 `messages` は API 応答の数、`web` は Web の検索と取得の回数の合計です。
+
+### Markdown で書き出す
+
+```bash
+ccrec export <セッション ID>                          # このディレクトリに書き出す
+ccrec export <セッション ID>... --out exports/        # 1 件 1 ファイルで exports/ に書き出す
+ccrec export <セッション ID> --out talk.md --lang ja
+ccrec export <セッション ID> --out - --no-tools       # 端末に出す（プロンプトと応答だけ）
+```
+
+プロンプトと応答を順に並べ、話し手ごとに見出しを付けます。ツール呼び出しとその結果、思考は、その応答の下に折りたたんで載せます（`<details>`。GitHub など多くの Markdown ビューアで折りたたまれて表示されます）。`--no-tools` と `--no-thinking` を付けると載せません。ツールの入力と結果は 1 件 2 万文字までです。`--max-output <n>` で変えられ、0 にすると全部を載せます。ツールが返した画像や PDF は、本体を載せずに種類と大きさだけを書きます。システムプロンプト、ツール定義、添付は載せません。本文は記録したとおりなので、記録時に伏せた秘密情報は伏せたままです。`--lang ja` を付けると見出しなどを日本語にします。
 
 ## 5. 記録を消す
 
@@ -531,6 +546,7 @@ rm -rf ~/.ccrec          # 記録したデータをすべて消す
 | `ccrec sessions [--limit <n>] [--account <ID>] [--day <yyyymmdd> [--org <ID>]] [--json]` | セッションの一覧 |
 | `ccrec show <セッション ID> [--full] [--kind <種類,…>] [--json]` | やりとりの中身 |
 | `ccrec summary <セッション ID> [--json]` | セッションの要約 |
+| `ccrec export <セッション ID>... [--out <ディレクトリ\|ファイル.md\|->] [--lang en\|ja] [--no-tools] [--no-thinking] [--max-output <n>]` | やりとりを Markdown で書き出す |
 | `ccrec usage [<セッション ID>...] [--json]` | モデル別の使用量 |
 | `ccrec delete <セッション ID>...` | セッションを消す |
 | `ccrec delete --before <yyyy-mm-dd> \| --older-than <n>d [--dry-run] [--account <ID>]` | 古いセッションをまとめて消す |

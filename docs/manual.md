@@ -269,6 +269,10 @@ Whether recording is working. It is `ccrec doctor` in a browser.
 
 "Refresh" reads it again.
 
+### Exporting as Markdown
+
+"Export as Markdown" at the top right of a session's page saves its conversation as a Markdown file: the prompts and the answers in order, then each sub-agent's under a heading of its own. Choose whether to include the tool calls with their results, and the thinking; both are folded under the answer they belong to. The file is named after the day and the title, such as `2026-10-08_Fix-paging-in-the-order-list_a1a1a1a1.md`. [`ccrec export`](#exporting-as-markdown-1) writes the same file.
+
 ### Deleting from the browser
 
 ![Confirming a deletion](images/en/ui-delete.jpg)
@@ -359,6 +363,17 @@ total      5 sessions               51        1,416       73,801        2,280   
 ```
 
 `messages` is the number of API messages; `web` is web searches and fetches together.
+
+### Exporting as Markdown
+
+```bash
+ccrec export <session-id>                        # into this directory
+ccrec export <session-id>... --out exports/      # one file each, into exports/
+ccrec export <session-id> --out talk.md --lang ja
+ccrec export <session-id> --out - --no-tools     # to the terminal, prompts and answers only
+```
+
+The prompts and the answers come in order, under a heading for each speaker. Tool calls, with what they returned, and thinking are folded under the answer they belong to (`<details>`, which GitHub and most Markdown viewers show folded); `--no-tools` and `--no-thinking` leave them out. Each tool input and result is kept up to 20,000 characters; `--max-output <n>` changes that, and 0 keeps everything. An image or a PDF a tool returned is named rather than included. The system prompt, tool definitions and attachments are left out. The text is as recorded, so what the recorder masked stays masked. `--lang ja` writes the labels in Japanese.
 
 ## 5. Deleting recordings
 
@@ -531,6 +546,7 @@ A recording is running at that moment. Wait a few seconds and delete again.
 | `ccrec sessions [--limit <n>] [--account <id>] [--day <yyyymmdd> [--org <id>]] [--json]` | Lists sessions |
 | `ccrec show <session-id> [--full] [--kind <kind,…>] [--json]` | Shows what was said and done |
 | `ccrec summary <session-id> [--json]` | Sums a session up |
+| `ccrec export <session-id>... [--out <dir\|file.md\|->] [--lang en\|ja] [--no-tools] [--no-thinking] [--max-output <n>]` | Writes the conversation as Markdown |
 | `ccrec usage [<session-id>...] [--json]` | Usage per model |
 | `ccrec delete <session-id>...` | Deletes sessions |
 | `ccrec delete --before <yyyy-mm-dd> \| --older-than <n>d [--dry-run] [--account <id>]` | Deletes old sessions together |

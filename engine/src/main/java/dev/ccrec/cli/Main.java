@@ -92,7 +92,7 @@ public final class Main {
     }
     Map<String, String> options = new HashMap<>();
     List<String> positional = new ArrayList<>();
-    Set<String> flags = Set.of("json", "full", "dry-run");
+    Set<String> flags = Set.of("json", "full", "dry-run", "no-thinking", "no-tools");
     for (int i = 1; i < args.length; i++) {
       String arg = args[i];
       if (!arg.startsWith("--")) {
@@ -126,6 +126,7 @@ public final class Main {
       case "delete" -> main.delete();
       case "usage" -> main.usage();
       case "summary" -> main.summary();
+      case "export" -> main.export();
       case "ui" -> main.ui();
       default -> throw new UsageException("unknown command: " + args[0]);
     };
@@ -706,6 +707,65 @@ public final class Main {
         m.outputTokens() == null ? 0 : m.outputTokens(),
         m.cacheReadTokens() == null ? 0 : m.cacheReadTokens(),
         m.cacheCreationTokens() == null ? 0 : m.cacheCreationTokens());
+  }
+
+  /**
+   * Writes sessions' conversations as Markdown: into the directory {@code --out} names (the current
+   * one by default), one file each, or for a single session into the {@code .md} file it names, or
+   * with {@code --out -} to standard output.
+   */
+  private int export() throws IOException {
+    if (positional.isEmpty()) {
+      throw new UsageException("export needs at least one session id");
+    }
+    String lang = options.getOrDefault("lang", "en");
+    if (!Set.of("en", "ja").contains(lang)) {
+      throw new UsageException("--lang needs en or ja, not \"" + lang + "\"");
+    }
+    SessionMarkdown.Options exportOptions =
+        new SessionMarkdown.Options(
+            !options.containsKey("no-thinking"),
+            !options.containsKey("no-tools"),
+            number("max-output", String.valueOf(SessionMarkdown.Options.DEFAULT_MAX_TOOL_CHARS)),
+            lang,
+            ZoneId.systemDefault());
+    String target = options.getOrDefault("out", ".");
+    boolean toStdout = target.equals("-");
+    boolean toFile = !toStdout && target.endsWith(".md") && !Files.isDirectory(Path.of(target));
+    if (toFile && positional.size() > 1) {
+      throw new UsageException("--out names one file; give a directory to export several sessions");
+    }
+    String accountId =
+        options.containsKey("account")
+            ? options.get("account")
+            : System.getenv("CCREC_IDENTITY_JSON") == null ? null : account(identity().path("account")).accountId();
+    int missing = 0;
+    try (RecordStore store = openStore()) {
+      for (String sessionId : positional) {
+        java.util.Optional<SessionRecord> session = store.session(sessionId, accountId);
+        List<MessageRecord> messages = store.messages(sessionId);
+        if (session.isEmpty() && messages.isEmpty()) {
+          missing++;
+          System.err.printf("%s  not recorded%n", sessionId);
+          continue;
+        }
+        String markdown = SessionMarkdown.of(sessionId, session, messages, store::content, exportOptions);
+        if (toStdout) {
+          out.print(markdown);
+          continue;
+        }
+        Path file =
+            toFile
+                ? Path.of(target)
+                : Path.of(target).resolve(SessionMarkdown.fileName(sessionId, session, exportOptions.zone()));
+        if (file.toAbsolutePath().getParent() != null) {
+          Files.createDirectories(file.toAbsolutePath().getParent());
+        }
+        Files.writeString(file, markdown, StandardCharsets.UTF_8);
+        out.printf("%s  exported to %s%n", sessionId, file);
+      }
+    }
+    return missing == 0 ? 0 : 1;
   }
 
   /**

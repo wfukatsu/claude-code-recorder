@@ -36,6 +36,11 @@ Reading
   ccrec usage [<session-id>...] [--json]
                                  tokens and API messages per model: of those sessions, or of
                                  the sessions "ccrec sessions" lists with the same options
+  ccrec export <session-id>... [--out <dir|file.md|->] [--lang en|ja] [--no-tools]
+               [--no-thinking] [--max-output n]
+                                 the conversation as Markdown, one file per session in --out
+                                 (default: here); tool input and output up to n characters
+                                 each (default 20000, 0 for all)
 
 Browsing
   ccrec ui [--port n] [--no-open]
@@ -165,6 +170,7 @@ export async function main(args) {
     case 'delete':
     case 'usage':
     case 'summary':
+    case 'export':
       return runEngine(ensureHome(), [command, ...rest], resolveIdentity());
     default:
       console.error(`ccrec: unknown command "${command}"\n`);

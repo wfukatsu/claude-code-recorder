@@ -67,6 +67,7 @@ ccrec ui              # look at it in a browser
 | `ccrec sessions` | Lists sessions |
 | `ccrec show <session-id>` | Shows what was said and done in a session |
 | `ccrec summary <session-id>` | Sums a session up: cost, durations, turns, tools, usage |
+| `ccrec export <session-id>...` | Writes the conversation as a Markdown file |
 | `ccrec usage [<session-id>...]` | Token usage per model |
 | `ccrec delete <session-id>...` | Deletes sessions |
 | `ccrec delete --older-than <n>d [--dry-run]` | Deletes old sessions together |
