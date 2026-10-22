@@ -75,6 +75,8 @@ ccrec ui              # look at it in a browser
 
 Options and sample output are in the [manual](docs/manual.md#4-looking-from-the-command-line).
 
+The `prompt-coach` skill that comes with it has Claude review your recorded sessions and suggest how to prompt better; see [Reviewing your prompts with Claude](docs/manual.md#reviewing-your-prompts-with-claude).
+
 ## The browser screens
 
 `ccrec ui` starts a server on this machine and opens a browser. Ctrl-C stops it.
