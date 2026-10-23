@@ -116,7 +116,7 @@ Run it as a command, or ask Claude Code something like "review my prompts":
 
 Without arguments it asks first: this session (the default) or all of them, and from when — since the last review if there was one, otherwise the last 7 days. With a last review to compare with, the report says which of its findings improved, and the new suggestions come from what happened since. A **security** section comes first: credentials or confidential material put into prompts (shown masked, such as `ghp_****`), and text in tool results or pastes that tried to steer Claude (prompt injection), with what Claude did next.
 
-It reads through `ccrec` alone, changing nothing in the database. Reports and the record of each review are kept in `~/.ccrec/prompt-coach/`, readable by you only, since they quote your prompts. More in the [manual](docs/manual.md#reviewing-your-prompts-with-claude).
+It reads through `ccrec` alone, changing nothing in the database. Reports and the record of each review are kept in `~/.ccrec/prompt-coach/`, readable by you only, since they quote your prompts. How it works, with an example of the report, is in the [manual](docs/manual.md#reviewing-your-prompts-with-claude).
 
 ## Choosing what is not recorded
 
