@@ -400,13 +400,109 @@ Run it as `/ccrec:prompt-coach` (or `/prompt-coach` when linked), or ask Claude 
 
 What is not given is asked first, with these defaults: this session; since the last review of it, or with none, the whole session (for all sessions, the last 7 days).
 
+#### How it works
+
+A script does the counting; Claude does the judging and the writing. What the script counts is never a finding by itself: only what Claude has checked against the recordings goes into the report.
+
+1. **Settling what and from when**: whatever the arguments leave open is asked. Before asking, the skill looks for the last review of the same target; if there is one, "since the last review" is the default.
+2. **Counting**: `scripts/analyze.mjs` reads the recordings through `ccrec sessions`, `ccrec summary` and `ccrec show --json --full`, and counts without judging.
+   - It takes the prompts you typed, sets aside approvals and acknowledgements ("OK", "go ahead"), and checks whether each remaining **work prompt** says what "done" means, sets a limit or scope, and names what to work on (a path, a URL, code, a paste). Slash command invocations and system notices are not counted: nobody typed them.
+   - It raises **flags** where something looks worth reading. Each flag has a type, an aspect, a severity, and excerpts of the records it rests on (300 characters each, at most two of a type per session). The types are listed below.
+   - Given a period, it counts only what happened in it. A session that began earlier contributes only its prompts and tool calls from within the period.
+   - Credentials in prompts are already masked in what it writes out.
+3. **Judging**: Claude reads the skill's rubric (`references/rubric.md`) and checks the flags one by one. For each type, the rubric says what it means, **when it is not a problem**, what to change in the prompt, and why that helps. A flag that is not a problem is dropped — an improvement loop run on purpose, a retry while waiting on CI, a document that explains prompt injection rather than attempting it. When an excerpt is not enough, Claude reads around it with `ccrec export` or `ccrec show`. Claude's own wavering or wasted tool calls are followed back to what in the prompt would have prevented them; problems unrelated to the prompt, such as API errors, go under "For reference".
+4. **Writing**: the suggestions are cut down to 5–8, most effective first, with 1–3 things done well. Before finishing, Claude checks that each quote belongs to the session and time it is attributed to, that the numbers match the analysis, and that no secret value is left.
+5. **Keeping**: `scripts/history.mjs` keeps how often each finding came up (as a share of work prompts, per 10 of them, or per session) and the findings the report made, in `~/.ccrec/prompt-coach/runs/`. The next review of the same target compares against this: down by 25% or more is "improved", up by 25% or more is "worse". With fewer than 5 work prompts (or, for all sessions, fewer than 2 sessions) it does not compare and says there was too little to judge.
+
+The types of flag:
+
+| Aspect | Type | What it finds |
+|---|---|---|
+| Security | `secret-in-prompt` | Credentials in a prompt or paste (including ones masked when recorded) |
+| | `confidential-in-prompt` | A "confidential" marking, card numbers, many email addresses |
+| | `injection-suspected` | Text in a tool result or paste posing as an instruction to Claude |
+| Instructions | `missing-criteria` / `missing-constraint` / `missing-target` | Work prompts without what "done" means, a limit or scope, or what to work on |
+| | `user-correction` | "No, that's not it" — a prompt that corrects the previous one |
+| | `vague-wording` | "Make it nice", "fix it" — words that leave the standard to Claude |
+| | `trouble-without-evidence` | A problem reported without the error text or the file |
+| | `short-prompt-big-task` | A prompt under 40 characters naming no target, followed by 15 or more tool calls |
+| | `repeated-prompt` | Nearly the same prompt sent again |
+| | `clarification-asked` | Claude asked a question before working |
+| Reasoning | `retraction` | Claude took something back or apologised |
+| | `interrupted` | The work was stopped midway |
+| | `api-errors` | Errors from the API |
+| Tools | `repeated-call` / `retry-after-error` | The same call repeated with nothing changed, or a failed call repeated as is |
+| | `tool-error-rate` | A tool called 5 times or more failed 20% of the time or more |
+| | `shell-for-builtin` / `large-results` | Files read or searched through the shell; a very large result entered the conversation |
+| | `tool-denials` | Many calls denied by permissions |
+| Model | `context-compacted` / `long-context` | The conversation was compacted, or one answer read more than 300,000 tokens of context |
+| | `heavy-model-for-lookup` | A top-tier sub-agent did nothing but read and search |
+| | `low-cache-hit` / `high-thinking-share` | Little was read from the cache; most of the output was thinking |
+
+#### What you get
+
+When it finishes, the conversation shows only the report's path and the gist: how many security findings and the most severe, what improved since the last review, and the top three suggestions. The full report is written to `~/.ccrec/prompt-coach/reports/prompt-review-<date>.md`.
+
 The report is laid out as:
 
-1. **Security**, always there: credentials put into prompts, named by kind and masked (`ghp_****`; a `[REDACTED]` ccrec put in when recording counts too, since the value was sent to Claude before it was masked), confidential material (a "confidential" marking, card numbers, lists of email addresses), and text in tool results or pastes that tried to steer Claude — "ignore the previous instructions", "do not tell the user" — with where it came from and what Claude answered next. Found in a session that ran with permissions bypassed, it is the most severe.
-2. **Since the last review**: each of its findings, how often it came up then and now, and whether it improved; an improvement in what prompts carry comes with a prompt of yours that now does.
-3. **Suggestions**, from what happened in the period: what happened, what in the prompt led to it, a rewrite, and why the rewrite works.
+1. **Summary**: one sentence each on security, what improved, the change that would help most, and a habit worth keeping.
+2. **Security**, always there: credentials put into prompts, named by kind and masked (`ghp_****`; a `[REDACTED]` ccrec put in when recording counts too, since the value was sent to Claude before it was masked), confidential material (a "confidential" marking, card numbers, lists of email addresses), and text in tool results or pastes that tried to steer Claude — "ignore the previous instructions", "do not tell the user" — with where it came from and what Claude answered next. Found in a session that ran with permissions bypassed, it is the most severe. If nothing is found, it says so; a flag judged a false positive is listed with the reason.
+3. **Since the last review**: a table of its findings, how often each came up then and now, and whether it improved; an improvement in what prompts carry comes with a prompt of yours that now does.
+4. **In numbers**: only the numbers the judgement used — output tokens by model, how well the cache worked, how many work prompts there were and how many said what "done" means, set a scope, or named a target.
+5. **Suggestions**, from what happened in the period, each with:
+   - **What happened**: the session's title, the time, a quote of the prompt, and what Claude did next
+   - **What in the prompt led to it**
+   - **A better way to put it**: a rewrite for that very moment
+   - **Why it works**: the reason, in terms of how Claude goes about the work
+6. **Done well**: ways of prompting worth keeping, with the session and quote they come from.
+7. **For reference**: things unrelated to the prompts, such as API errors or tool failures.
+8. **Sessions reviewed**: date, title, prompts, tool calls, and output tokens of each.
 
-It reads through `ccrec` alone; nothing in the database changes. Reports go to `~/.ccrec/prompt-coach/reports/` and the record of each review to `~/.ccrec/prompt-coach/runs/`, both readable by you only, since they quote your prompts.
+A suggestion reads like this (a made-up example):
+
+````markdown
+### 1. Report a failure with the error itself
+
+- **Aspect**: instructions
+- **Came up**: 3 sessions, 4 times
+- **Last review**: unchanged
+
+**What happened**
+
+Payment API retry fix (2026-10-21 14:05)
+
+> The tests fail, fix it
+
+Claude ran the tests three times and called Grep and Read 11 times looking for the logs before
+it found the timeout setting at fault.
+
+**What in the prompt led to it**
+
+It did not say which test failed, or with what error.
+
+**A better way to put it**
+
+```text
+PaymentRetryTest fails under npm test -- payment. The error is below.
+<the full error>
+Fix only the behaviour in src/payment/retry.ts; leave the tests as they are.
+```
+
+**Why it works**
+
+Claude guesses causes from symptoms. Given the error itself, it can start from the file and line
+in the stack trace instead of searching for the logs.
+````
+
+#### When nothing comes out
+
+- **This session is not recorded yet**: the hook records a session each time an answer finishes. Choosing `current` in the first request of a new session leaves nothing to analyse.
+- **No work prompts**: invoking `/ccrec:prompt-coach` does not count as a work prompt, so a session that has done nothing but reviews yields no findings about prompts. Pass the id of a session where work was done, or review `all 7d`.
+- **Too little to compare**: the comparison with the last review needs 5 work prompts or more (for all sessions, 2 sessions or more); with fewer, it says there was too little to judge.
+- **A false positive from the review itself**: when the skill reads its own rubric, which quotes examples of prompt injection, `injection-suspected` may be raised. The report treats it as one of the cases that are not a problem.
+- To review the same thing each time, pass both arguments, as in `/ccrec:prompt-coach all 7d`; the questions are then skipped.
+
+It reads through `ccrec` alone; nothing in the database changes. Reports go to `~/.ccrec/prompt-coach/reports/` and the record of each review to `~/.ccrec/prompt-coach/runs/`, both readable by you only, since they quote your prompts. Claude does not send the report to any outside service.
 
 ## 5. Deleting recordings
 
