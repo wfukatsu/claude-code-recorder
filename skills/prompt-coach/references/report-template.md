@@ -1,97 +1,98 @@
-# プロンプト改善レビュー（<対象> / <期間>）
+# Prompt review (<target> / <period>)
 
-> 対象: <アカウント>、<今のセッションのタイトル、または「全セッション（n 件）」>、<開始>〜<終了>（<地域の時刻>）。
-> 前回のレビュー: <日時、または「なし」>。ccrec の記録から作成。引用は記録のまま（記録時の伏せ字を含む）。秘密の値は伏せている。
+> Target: <account>, <this session's title, or "all sessions (n)">, <start>–<end> (<local time zone>).
+> Previous review: <date and time, or "none">. Made from the ccrec recordings. Quotes are as recorded (including masks applied when recording). Secret values are masked.
 
-## まとめ
+## Summary
 
-- セキュリティ: <見つかった件数と最も重いもの。無ければ「指摘なし」>
-- 前回から良くなったこと: <1 文。前回が無ければこの行を省く>
-- いちばん効く改善: <1 文>
-- 続けたいよい習慣: <1 文>
+- Security: <how many found and the most severe; if none, "nothing found">
+- Improved since the last review: <1 sentence; leave this line out if there was no previous review>
+- The change that would help most: <1 sentence>
+- A good habit to keep: <1 sentence>
 
-## セキュリティ
+## Security
 
-見つからなければ「プロンプトの秘密情報・機密情報、プロンプトインジェクションの疑いは見つからなかった」
-とだけ書く。
+If nothing was found, write only "No secrets or confidential material in prompts, and no suspected
+prompt injection, were found."
 
-### <深刻度> <種類: 例「プロンプトに GitHub のトークン」>
+### <severity> <kind, e.g. "A GitHub token in a prompt">
 
-- **どこで**: <セッションのタイトル>（<時刻>）、<プロンプト／貼り付け／WebFetch の結果（URL）など>
-- **何が**: <伏せ字のまま。例「GitHub token: ghp_****」。注入なら該当の 1 文>
-- **その後**: <注入なら、Claude が従ったように見えるか。秘密なら、記録時に伏せられたか>
-- **すること**: <鍵の失効と作り直し、権限モードの見直しなど、具体的に>
-- **なぜ**: <2〜3 文>
+- **Where**: <session title> (<time>), <prompt / paste / WebFetch result (URL), etc.>
+- **What**: <masked, e.g. "GitHub token: ghp_****"; for injection, the sentence in question>
+- **Then**: <for injection, whether Claude appears to have followed it; for a secret, whether it was masked when recorded>
+- **What to do**: <revoke and reissue the key, review the permission mode, etc., concretely>
+- **Why**: <2–3 sentences>
 
-## 前回からの変化
+## Since the last review
 
-前回のレビューが無ければ、この節は省く。
+Leave this section out if there was no previous review.
 
-| 前回の指摘 | 前回 | 今回 | 判定 |
+| Previous finding | Then | Now | Verdict |
 |---|---|---|---|
-| <見出し> | <値と単位> | <値と単位> | 良くなった／変わらない／悪化した／件数が少なく判断できない |
+| <heading> | <value and unit> | <value and unit> | improved / unchanged / worse / too little to judge |
 
-### 良くなった点
+### What improved
 
-- **<見出し>**: <前回の値> → <今回の値>。<今回の良い例の引用（セッション、時刻）>。<何が良かったか 1 文>
+- **<heading>**: <value then> → <value now>. <quote of a good example from this period (session, time)>. <what was good, in 1 sentence>
 
-## 数字で見る
+## In numbers
 
-| 指標 | 値 | 読み方 |
+| Measure | Value | How to read it |
 |---|---|---|
-| 出力トークン（モデル別） | <model>: <n> | <判断に使った点だけ> |
-| キャッシュ読み取りの割合 | <n>% | |
-| 圧縮が起きたセッション | <n> / <n> | |
-| 作業を頼んだプロンプト | <n> 件 | 完了の形あり <n>、制約あり <n>、対象あり <n> |
+| Output tokens (by model) | <model>: <n> | <only what the judgement used> |
+| Share read from cache | <n>% | |
+| Sessions compacted | <n> / <n> | |
+| Prompts that asked for work | <n> | with what done means <n>, with a constraint <n>, with a target <n> |
 
-判断に使わなかった数字は載せない。
+Leave out numbers the judgement did not use.
 
-## 改善点
+## Suggestions
 
-今回の期間のやりとりから。前回の指摘が「変わらない」「悪化した」なら、その旨を見出しの下に書く。
+From what happened in this period. If a previous finding is "unchanged" or "worse", say so under its
+heading.
 
-### 1. <見出し: 改善の内容を動詞で。例「不具合はエラーの原文を添えて伝える」>
+### 1. <heading: the change, as a verb phrase, e.g. "Report a failure with the error itself">
 
-- **観点**: 指示 / 推論 / ツール / モデル
-- **出た回数**: <n> セッション、<n> 回
-- **前回**: <初めて／変わらない／悪化した>
+- **Aspect**: instructions / reasoning / tools / model
+- **Came up**: <n> sessions, <n> times
+- **Last review**: <new / unchanged / worse>
 
-**何が起きたか**
+**What happened**
 
-<セッションのタイトル>（<YYYY-MM-DD HH:mm>）
+<session title> (<YYYY-MM-DD HH:mm>)
 
-> <プロンプトの引用>
+> <quote of the prompt>
 
-<そのあと AI が何をしたか。ツール呼び出しの数、撤回、言い直しなど、事実だけを 2〜3 文で>
+<what the AI did next: the number of tool calls, retractions, corrections — facts only, in 2–3 sentences>
 
-**指示のどこが原因か**
+**What in the instructions led to it**
 
-<1〜2 文>
+<1–2 sentences>
 
-**こう書くとよい**
+**A better way to put it**
 
 ```text
-<その場面に合わせた書き換え例>
+<a rewrite fitted to that moment>
 ```
 
-**なぜよいか**
+**Why it works**
 
-<AI の動き方に即した理由を 2〜4 文で>
+<the reason, in terms of how the AI goes about the work, in 2–4 sentences>
 
 ---
 
-（2. 以降も同じ形。5〜8 件まで）
+(2. onwards in the same form, up to 5–8 in all)
 
-## よかった点
+## Done well
 
-- **<見出し>**: <根拠のセッションと引用> — <なぜよかったか>
+- **<heading>**: <the session and quote it rests on> — <why it was good>
 
-## 参考（指示とは関係の薄いもの）
+## For reference (little to do with the instructions)
 
-- <API エラー、ツールの不具合など。1 行ずつ>
+- <API errors, tool failures, etc., one per line>
 
-## 対象にしたセッション
+## Sessions reviewed
 
-| 日付 | タイトル | プロンプト | ツール呼び出し | 出力トークン |
+| Date | Title | Prompts | Tool calls | Output tokens |
 |---|---|---|---|---|
-| <YYYY-MM-DD> | <タイトル> | <n> | <n> | <n> |
+| <YYYY-MM-DD> | <title> | <n> | <n> | <n> |
