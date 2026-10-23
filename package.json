@@ -43,7 +43,7 @@
   "scripts": {
     "build": "cd engine && ./gradlew -q shadowJar",
     "build:full": "cd engine && ./gradlew -q shadowJar -Pfull",
-    "test": "node --test test/recorder.test.js test/prompt-coach.test.js && cd engine && ./gradlew -q test",
+    "test": "node --test test/recorder.test.js test/prompt-coach.test.js test/prompt-coach-history.test.js && cd engine && ./gradlew -q test",
     "prepare": "npm run build"
   },
   "license": "Apache-2.0"

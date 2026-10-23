@@ -182,6 +182,8 @@ npm pack        # 配布用 .tgz（ビルド込み）
 ```
 
 - `bin/`, `src/` — Node 製の CLI とフック（依存パッケージなし）
+- `skills/prompt-coach/` — Claude Code のスキル。`.claude-plugin/marketplace.json` で、リポジトリがこのスキルをプラグイン `ccrec` として配るマーケットプレイスになります。プラグインには独自のバージョンを付けていないので、Claude Code はコミット単位で更新します。プラグインとして入れたスキルは、ビルド済みのエンジンを含まないリポジトリの写しなので、PATH にある `ccrec` を通して記録を読みます
+  - `scripts/analyze.mjs` が数え（中身は `lib.mjs`）、`scripts/history.mjs` が実行ごとの記録を `$CCREC_HOME/prompt-coach/`（0700）に残します。`runs/<時刻>.json` には、対象（`{"kind":"session","sessionId":…}` または `{"kind":"all"}`）、期間（`since`、`until`）、指摘ごとの割合（`rates`。作業のプロンプトに占める割合、その 10 件あたり、またはセッション 1 件あたり）、レポートにした指摘（`lib.mjs` の `FINDINGS` にある id）を入れます。`reports/prompt-review-<日付>.md` がレポートです。同じ対象の次のレビューは、この割合と比べます
 - `engine/` — Java 製の記録エンジン。`RecordStore`（保存の抽象）、`ScalarDbRecordStore`（ScalarDB 実装）、`TranscriptParser`、`Ingester`、`Redactor`、`Syncer`（全社収集への送信口。現状は未実装で何もしません）
 
 依存バージョン（2026-10-07 に各レジストリで確認）: ScalarDB 3.19.1、Shadow 9.6.1、JUnit 6.1.3、Gradle 9.8.0。Jackson 2.18.7 と SLF4J 1.7.36 は ScalarDB 3.19.1 が解決するバージョンに合わせています。

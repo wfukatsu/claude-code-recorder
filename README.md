@@ -10,6 +10,8 @@ Records what happens in Claude Code, per account, into a database, and lets you 
 - **How it records**: Claude Code's hooks record what is new after every response. Claude Code is never kept waiting, and nothing is recorded twice however often a transcript is read.
 - **Where it records**: through [ScalarDB](https://scalardb.scalar-labs.com/), into SQLite on your machine at first. Replacing one configuration file points it at PostgreSQL or another database.
 - **How you look at it**: `ccrec ui` shows the sessions, the conversations and usage charts in a browser, in English or Japanese.
+- **Taking it elsewhere**: a session's conversation can be exported as a Markdown file, from the browser or with `ccrec export`.
+- **Learning from it**: the `prompt-coach` skill that comes with it has Claude read your sessions and show how to prompt it better.
 
 ![A session](docs/images/en/ui-session.jpg)
 
@@ -75,8 +77,6 @@ ccrec ui              # look at it in a browser
 
 Options and sample output are in the [manual](docs/manual.md#4-looking-from-the-command-line).
 
-The `prompt-coach` skill that comes with it has Claude review your recorded sessions and suggest how to prompt better; see [Reviewing your prompts with Claude](docs/manual.md#reviewing-your-prompts-with-claude).
-
 ## The browser screens
 
 `ccrec ui` starts a server on this machine and opens a browser. Ctrl-C stops it.
@@ -84,11 +84,39 @@ The `prompt-coach` skill that comes with it has Claude review your recorded sess
 | Screen | What you can do |
 |---|---|
 | Sessions | Filter by period, project and title. Select several and delete them |
-| A session | Read the conversation, laid out. See what reached beyond this machine and Claude (web, shell, MCP) gathered by destination. See usage, calls per tool and details. Delete it |
+| A session | Read the conversation, laid out. See what reached beyond this machine and Claude (web, shell, MCP) gathered by destination. See usage, calls per tool and details. Export it as Markdown. Delete it |
 | Usage | See usage per day as a chart by model, and totals by model and by project |
 | Status | Check the hooks, sessions not yet recorded, where it records, and the ingest log |
 
 The server listens on `127.0.0.1` only and answers no request without the token it issues at each start. The address it prints carries that token: do not hand it to anyone.
+
+## Reviewing your prompts with Claude
+
+The `prompt-coach` skill reads your recordings and tells you how to prompt better. It looks at token use and the models used, how the tools were used, and where Claude wavered or took something back, and traces each to what the prompts left out: what "done" means, the scope, the error itself. Each finding comes with the moment it happened, a rewrite, and why the rewrite works.
+
+Install it as a Claude Code plugin, in Claude Code (2.1.275 or later):
+
+```text
+/plugin install ccrec --marketplace wfukatsu/claude-code-recorder
+```
+
+On an older Claude Code, add the marketplace first: `/plugin marketplace add wfukatsu/claude-code-recorder`, then `/plugin install ccrec@claude-code-recorder`. The skill reads through the `ccrec` you installed with npm, so install and set that up first. Without the plugin, a link to the skill in the installed package works too:
+
+```bash
+ln -s "$(npm root -g)/claude-code-recorder/skills/prompt-coach" ~/.claude/skills/prompt-coach
+```
+
+Run it as a command, or ask Claude Code something like "review my prompts":
+
+```text
+/ccrec:prompt-coach                 # asks what to review, and from when
+/ccrec:prompt-coach current last    # this session, since the last review of it
+/ccrec:prompt-coach all 7d          # all your sessions, the last 7 days
+```
+
+Without arguments it asks first: this session (the default) or all of them, and from when — since the last review if there was one, otherwise the last 7 days. With a last review to compare with, the report says which of its findings improved, and the new suggestions come from what happened since. A **security** section comes first: credentials or confidential material put into prompts (shown masked, such as `ghp_****`), and text in tool results or pastes that tried to steer Claude (prompt injection), with what Claude did next.
+
+It reads through `ccrec` alone, changing nothing in the database. Reports and the record of each review are kept in `~/.ccrec/prompt-coach/`, readable by you only, since they quote your prompts. More in the [manual](docs/manual.md#reviewing-your-prompts-with-claude).
 
 ## Choosing what is not recorded
 

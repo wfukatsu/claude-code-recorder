@@ -18,10 +18,19 @@ export const LIMITS = {
   lowCacheMinTokens: 200_000,
   thinkingShare: 0.6,
   thinkingMinOutput: 20_000,
+  // A context this large is read again at every answer, compacted or not.
+  longContextTokens: 300_000,
   shortPromptChars: 40,
   troublePromptChars: 200,
   busyTurnToolCalls: 15,
   similarPrompts: 0.8,
+  injectionChars: 160,
+  emailsListed: 5,
+  // Comparing with the last run: a change counts once it is this large, relative to before, and
+  // only over enough of what it is counted against.
+  changeRatio: 0.25,
+  minWorkPrompts: 5,
+  minSessions: 2,
 };
 
 /** The models that cost the most per token: worth it for judgement, not for looking things up. */
@@ -82,10 +91,139 @@ const PATH = /(^|[\s`'"(])(~|\.{1,2})?\/[\w.@-]+\/[\w./@-]*|\b[\w-]+\.(js|ts|tsx
 const URL = /https?:\/\/\S+/;
 const CODE = /```|^\s{4}\S|\b(Exception|Traceback|at [\w.$]+\(|line \d+)\b/m;
 
+// ---- secrets ---------------------------------------------------------------------------------
+
+/**
+ * Credentials by shape: the ones ccrec masks when it records (engine/…/Redactor.java), for a store
+ * that records with masking off, and the ones it does not — a cookie jar's session value, a
+ * password said in words. `value` names the group that is the secret; without one, all of it is.
+ */
+const SECRETS = [
+  { kind: 'Anthropic API key', pattern: /sk-ant-[A-Za-z0-9_-]{20,}/g },
+  { kind: 'OpenAI API key', pattern: /sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{20,}|\bsk-[A-Za-z0-9]{32,}/g },
+  { kind: 'AWS access key', pattern: /\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/g },
+  { kind: 'GitHub token', pattern: /\bgh[pousr]_[A-Za-z0-9]{36,}\b|\bgithub_pat_[A-Za-z0-9_]{40,}\b/g },
+  { kind: 'GitLab token', pattern: /\bglpat-[A-Za-z0-9_-]{20,}/g },
+  { kind: 'Slack token', pattern: /\bxox[abprs]-[A-Za-z0-9-]{10,}|https:\/\/hooks\.slack\.com\/services\/[A-Za-z0-9/]{20,}/g },
+  { kind: 'Google key or token', pattern: /\bAIza[A-Za-z0-9_-]{35}\b|\bya29\.[A-Za-z0-9_-]{20,}/g },
+  { kind: 'Stripe key', pattern: /\b[sr]k_(?:live|test)_[A-Za-z0-9]{16,}|\bwhsec_[A-Za-z0-9]{24,}/g },
+  { kind: 'npm / Hugging Face / SendGrid token', pattern: /\bnpm_[A-Za-z0-9]{36}\b|\bhf_[A-Za-z0-9]{30,}\b|\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\b/g },
+  { kind: 'JWT', pattern: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g },
+  { kind: 'private key', pattern: /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g },
+  { kind: 'password in a URL', pattern: /\b[A-Za-z][A-Za-z0-9+.-]*:\/\/[^\s/:@"'<>]+:([^\s/@"'<>\\]+)(?=@)/g, value: 1 },
+  { kind: 'Authorization header', pattern: /\b(?:authorization["']?\s*[:=]\s*["']?(?:basic|bearer|token)|bearer)\s+([A-Za-z0-9._~+/=-]{20,})/gi, value: 1 },
+  { kind: 'secret in an assignment', pattern: /\b(?:[A-Z0-9]+_)*(?:SECRET|PASSWORD|PASSWD|TOKEN|API_KEY|APIKEY|ACCESS_KEY|PRIVATE_KEY|CREDENTIALS)(?:_[A-Z0-9]+)*=["']?(?![$<{])([^\s"']{8,})/g, value: 1 },
+  { kind: 'session cookie', pattern: /["']?\b(?:csrftoken|csrf_token|sessionid|session_id|sid|connect\.sid|_session|auth_token|access_token|refresh_token)["']?\s*[:=]\s*["']?([A-Za-z0-9%._~+/=-]{12,})/gi, value: 1 },
+  // A value with a digit or a symbol in it: "パスワードは環境変数にある" names no password.
+  { kind: 'password', pattern: /(?:\bpassword|\bpasswd|\bpwd|パスワード)\s*(?:は|:|：|=)\s*["'「]?((?=[!-~]*[0-9!@#$%^&*_+=.-])[!-~]{6,})/gi, value: 1 },
+];
+const RECORDER_MASK = '[REDACTED]';
+
+/** A secret as far as it may be shown: its first four characters. */
+const masked = (secret) => `${secret.slice(0, 4)}****`;
+
+/** The secrets in a text, by kind, each masked. */
+export function findSecrets(text) {
+  const found = [];
+  const source = String(text ?? '');
+  for (const { kind, pattern, value } of SECRETS) {
+    for (const match of source.matchAll(pattern)) {
+      const secret = value ? match[value] : match[0];
+      if (secret && !secret.includes(RECORDER_MASK)) found.push({ kind, masked: masked(secret) });
+    }
+  }
+  const recorded = source.split(RECORDER_MASK).length - 1;
+  if (recorded > 0) found.push({ kind: 'masked by ccrec when recorded', masked: `${RECORDER_MASK} ×${recorded}` });
+  return found;
+}
+
+/** A text with every secret in it masked: what any excerpt goes through before it is shown. */
+export function maskSecrets(text) {
+  let result = String(text ?? '');
+  for (const { pattern, value } of SECRETS) {
+    result = result.replace(pattern, (whole, ...groups) => {
+      const secret = value ? groups[value - 1] : whole;
+      return typeof secret === 'string' ? whole.replace(secret, masked(secret)) : whole;
+    });
+  }
+  return result;
+}
+
+// ---- what should not have been in a prompt, and what tried to steer Claude -------------------
+
+const CONFIDENTIAL = /社外秘|部外秘|極秘|機密|取扱注意|個人情報|マイナンバー|\bconfidential\b|\binternal only\b|\bNDA\b|\bproprietary\b|\bPII\b/i;
+const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+const CARD = /\b(?:\d[ -]?){15,16}\b/g;
+
+function luhn(digits) {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i++) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+/** Signs that a prompt carries what is not to be shared: a marking, a card number, a list of people. */
+export function findConfidential(text) {
+  const found = [];
+  const marking = CONFIDENTIAL.exec(text);
+  if (marking) found.push({ kind: 'marked confidential', detail: marking[0] });
+  // An id in an address (a file, an issue) is not a card, however its digits add up.
+  const cards = [...text.replace(/https?:\/\/\S+/g, ' ').matchAll(CARD)]
+    .map((m) => m[0].replace(/\D/g, ''))
+    .filter((d) => (d.length === 15 || d.length === 16) && luhn(d));
+  if (cards.length > 0) found.push({ kind: 'card number', detail: `${cards.length} (${cards.map((d) => `****${d.slice(-4)}`).join(', ')})` });
+  const emails = new Set(text.match(EMAIL) ?? []);
+  if (emails.size >= LIMITS.emailsListed) found.push({ kind: 'list of email addresses', detail: `${emails.size} addresses` });
+  return found;
+}
+
+/**
+ * Text written to steer a model away from what its user asked: to drop its instructions, to take on
+ * another role, to give away its prompt or the user's data, to keep quiet about it.
+ */
+const INJECTION = [
+  /\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(previous|prior|above|earlier|all|any|your)\b[^.\n]{0,20}\b(instructions?|prompts?|rules|guidelines)\b/i,
+  /\byou are now\b|\bfrom now on,? you (are|will|must)\b|\bnew (system )?instructions?\s*:/i,
+  /\b(reveal|print|output|show|repeat|leak)\b[^.\n]{0,30}\b(system prompt|your instructions|hidden instructions)\b/i,
+  /\bdo not (tell|inform|mention|reveal)\b[^.\n]{0,30}\b(the )?user\b/i,
+  /\b(send|post|upload|exfiltrate|forward)\b[^.\n]{0,60}\b(credentials?|secrets?|tokens?|keys?|passwords?|\.env|ssh)\b[^.\n]{0,40}\bhttps?:\/\//i,
+  /(以前|これまで|前|上記|先ほど)の(指示|命令|ルール|プロンプト)(を|は)(すべて|全て)?(無視|忘れ)/,
+  /システムプロンプト(を|の内容を)(表示|出力|教え|開示|見せ)/,
+  /ユーザー(に|には)(伝え|言わ|知らせ|報告し)(ないで|るな|てはいけない)/,
+  /(認証情報|秘密鍵|トークン|パスワード|APIキー)[^。\n]{0,30}(https?:\/\/|外部|次の(URL|アドレス)|サーバー)[^。\n]{0,40}(送信して|送って|アップロードして)/,
+];
+
+/**
+ * Tools whose results Claude Code itself writes: a sub-agent's report with the harness's notes
+ * ("do not mention to user"), a skill's own text, tool descriptions. What a sub-agent read from
+ * outside is in its own records, and is checked there.
+ */
+const HARNESS_TOOLS = new Set(['Agent', 'Task', 'SendMessage', 'TaskOutput', 'Skill', 'ToolSearch']);
+
+/** The first sentence in a text that reads like an injection, cut short and masked. */
+export function findInjection(text) {
+  const source = String(text ?? '');
+  for (const pattern of INJECTION) {
+    const match = pattern.exec(source);
+    if (match) {
+      const from = Math.max(0, match.index - 60);
+      return excerpt(source.slice(from, match.index + match[0].length + 60), LIMITS.injectionChars);
+    }
+  }
+  return null;
+}
+
 // ---- helpers --------------------------------------------------------------------------------
 
+/** What may be shown of a text: in one line, cut short, with any secret in it masked. */
 export function excerpt(text, chars = LIMITS.excerptChars) {
-  const flat = String(text ?? '').replace(/\s+/g, ' ').trim();
+  const flat = maskSecrets(text).replace(/\s+/g, ' ').trim();
   return flat.length <= chars ? flat : `${flat.slice(0, chars)}…`;
 }
 
@@ -145,6 +283,11 @@ const WRAPPER =
   /<(command-[\w-]+|local-command-[\w-]+|bash-[\w-]+|system-reminder|task-notification|user-prompt-submit-hook|ide_[\w-]+|teammate-message)(\s[^<>]*)?>[\s\S]*?<\/\1(\s[^<>]*)?>/g;
 
 const pasted = (chars) => `[pasted: ${chars} chars]`;
+
+/** What was pasted into a prompt, which typedText leaves out of everything else. */
+function pastedBlocks(text) {
+  return [...String(text ?? '').matchAll(/<pasted_content(\s[^<>]*)?>([\s\S]*?)<\/pasted_content(\s[^<>]*)?>/g)].map((m) => m[2]);
+}
 const PASTED = /\[pasted: \d+ chars\]/;
 
 function bigrams(text) {
@@ -281,6 +424,12 @@ export function analyzeSession({ session, summary, records: all, since = null })
       detail: `the context was compacted ${compactions} time(s); the largest context was ${maxContext} tokens`,
     });
   }
+  if (maxContext >= LIMITS.longContextTokens) {
+    const messages = Object.values(byModel).reduce((sum, row) => sum + row.messages, 0);
+    flag('long-context', 'model', 'medium', {
+      detail: `the context reached ${maxContext} tokens; ${messages} answers read ${Math.round(read / messages)} tokens each on average, ${total.cacheRead} from the cache in all`,
+    });
+  }
 
   // ---- tools ----
   const calls = new Map();
@@ -387,6 +536,60 @@ export function analyzeSession({ session, summary, records: all, since = null })
   if (apiErrors.length > 0) {
     flag('api-errors', 'reasoning', 'low', { detail: apiErrors.map(([kind, n]) => `${kind} ${n}`).join(', ') });
   }
+
+  // ---- security ----
+  const modes = new Set(records.map((r) => attributesOf(r).permission_mode).filter(Boolean));
+  const unattended = modes.has('bypassPermissions');
+  const calledBy = new Map(records.filter((r) => r.kind === 'tool_use' && r.toolUseId).map((r) => [r.toolUseId, r]));
+  records.forEach((r, index) => {
+    if (r.kind === 'user_prompt' && r.agentId === 'main' && !attributesOf(r).compact_summary) {
+      const body = bodyOf(r);
+      const secrets = findSecrets(body);
+      if (secrets.length > 0) {
+        flag('secret-in-prompt', 'security', 'high', {
+          at: iso(r.ts),
+          detail: `a prompt carried ${secrets.length} credential(s)${pastedBlocks(body).some((b) => findSecrets(b).length) ? ', in what was pasted' : ''}`,
+          evidence: secrets.slice(0, 5).map((s) => ({ role: 'secret', text: `${s.kind}: ${s.masked}` })),
+        });
+      }
+      const confidential = findConfidential(typedText(body) ?? '').concat(pastedBlocks(body).flatMap(findConfidential));
+      if (confidential.length > 0) {
+        flag('confidential-in-prompt', 'security', 'medium', {
+          at: iso(r.ts),
+          detail: 'a prompt carried what may not be meant to leave its owner',
+          evidence: confidential.map((c) => ({ role: 'sign', text: `${c.kind}: ${c.detail}` })),
+        });
+      }
+      // What the user typed is the user's own instruction; what was pasted came from elsewhere.
+      for (const block of pastedBlocks(body)) {
+        const sentence = findInjection(block);
+        if (sentence) {
+          flag('injection-suspected', 'security', unattended ? 'critical' : 'high', {
+            at: iso(r.ts),
+            detail: `pasted text reads like an instruction to the model${unattended ? '; the session ran with permissions bypassed' : ''}`,
+            evidence: [{ role: 'source', text: 'pasted into a prompt' }, { role: 'sentence', text: sentence }],
+          });
+          break;
+        }
+      }
+    } else if (r.kind === 'tool_result') {
+      const call = calledBy.get(r.toolUseId);
+      if (HARNESS_TOOLS.has(call?.toolName)) return;
+      const sentence = findInjection(bodyOf(r));
+      if (!sentence) return;
+      const next = records.slice(index + 1).find((later) => later.agentId === r.agentId && later.kind === 'assistant_text');
+      flag('injection-suspected', 'security', unattended ? 'critical' : 'high', {
+        agentId: r.agentId,
+        at: iso(r.ts),
+        detail: `a ${call?.toolName ?? 'tool'} result reads like an instruction to the model${unattended ? '; the session ran with permissions bypassed' : ''}`,
+        evidence: [
+          { role: 'source', text: `${call?.toolName ?? 'tool'}: ${call ? gist(call) : ''}` },
+          { role: 'sentence', text: sentence },
+          { role: 'next answer', text: excerpt(next ? bodyOf(next) : '', 200) },
+        ],
+      });
+    }
+  });
 
   // ---- the prompts ----
   const main = records.filter((r) => r.agentId === 'main');
@@ -506,7 +709,7 @@ export function analyzeSession({ session, summary, records: all, since = null })
 }
 
 const round = (n) => Math.round(n * 1000) / 1000;
-const SEVERITY = { high: 0, medium: 1, low: 2 };
+const SEVERITY = { critical: -1, high: 0, medium: 1, low: 2 };
 
 /** The first few flags of each type, in the order they happened, each with how many there were in all; by severity. */
 function trimmed(flags) {
@@ -576,4 +779,88 @@ export function totals(analyses) {
     }
   }
   return byModel;
+}
+
+// ---- the last run, and what changed since -----------------------------------------------------
+
+/**
+ * What a finding is about, as a run records it: a flag type, or what too few prompts carried. A run
+ * is compared with the next by these, so a finding outside them is not kept.
+ */
+export const FINDINGS = {
+  'missing-criteria': 'instructions',
+  'missing-constraint': 'instructions',
+  'missing-target': 'instructions',
+  'user-correction': 'instructions',
+  'vague-wording': 'instructions',
+  'trouble-without-evidence': 'instructions',
+  'short-prompt-big-task': 'instructions',
+  'repeated-prompt': 'instructions',
+  'clarification-asked': 'instructions',
+  'retraction': 'reasoning',
+  'interrupted': 'reasoning',
+  'api-errors': 'reasoning',
+  'repeated-call': 'tools',
+  'retry-after-error': 'tools',
+  'tool-error-rate': 'tools',
+  'shell-for-builtin': 'tools',
+  'large-results': 'tools',
+  'tool-denials': 'tools',
+  'context-compacted': 'model',
+  'long-context': 'model',
+  'heavy-model-for-lookup': 'model',
+  'low-cache-hit': 'model',
+  'high-thinking-share': 'model',
+  'secret-in-prompt': 'security',
+  'confidential-in-prompt': 'security',
+  'injection-suspected': 'security',
+};
+
+/**
+ * How often each finding came up in an analysis, against what it is counted over: what a prompt
+ * lacked, as a share of the prompts that asked for work; a flag about prompts, per 10 of them;
+ * any other, per session.
+ */
+export function rates(analysis) {
+  const profile = analysis.scope.promptProfile;
+  const sessions = analysis.scope.sessions;
+  const work = profile.work;
+  const byType = Object.fromEntries(analysis.patterns.map((p) => [p.type, p.occurrences]));
+  const result = {};
+  for (const [id, category] of Object.entries(FINDINGS)) {
+    if (id.startsWith('missing-')) {
+      const has = { 'missing-criteria': profile.criteria, 'missing-constraint': profile.constraint, 'missing-target': profile.anchored }[id];
+      result[id] = { value: work ? (work - has) / work : null, over: work, unit: 'share of work prompts' };
+    } else if (category === 'instructions') {
+      result[id] = { value: work ? ((byType[id] ?? 0) / work) * 10 : null, over: work, unit: 'per 10 work prompts' };
+    } else {
+      result[id] = { value: sessions ? (byType[id] ?? 0) / sessions : null, over: sessions, unit: 'per session' };
+    }
+  }
+  return result;
+}
+
+/**
+ * Each finding of the last run against how often it comes up now: improved, unchanged, worse, or
+ * too little to tell. An improvement in what prompts carry comes with a prompt that now carries it.
+ */
+export function compare(baseline, analysis) {
+  const now = rates(analysis);
+  const prompts = analysis.sessions.flatMap((s) => s.prompts.map((p) => ({ ...p, sessionId: s.sessionId, title: s.title })));
+  const feature = { 'missing-criteria': 'criteria', 'missing-constraint': 'constraint', 'missing-target': 'anchored' };
+  return (baseline.findings ?? []).map((finding) => {
+    const before = baseline.rates?.[finding.id];
+    const after = now[finding.id];
+    const row = { id: finding.id, title: finding.title, before: before?.value ?? null, after: after?.value ?? null, unit: after?.unit };
+    const enough = FINDINGS[finding.id] === 'instructions' || finding.id.startsWith('missing-') ? LIMITS.minWorkPrompts : LIMITS.minSessions;
+    if (!after || after.value === null || after.over < enough || before?.value == null) return { ...row, status: 'too-little' };
+    const change = before.value === 0 ? (after.value === 0 ? 0 : Infinity) : (after.value - before.value) / before.value;
+    const status = change <= -LIMITS.changeRatio ? 'improved' : change >= LIMITS.changeRatio ? 'worse' : 'unchanged';
+    if (status === 'improved' && feature[finding.id]) {
+      const name = feature[finding.id];
+      const good = prompts.find((p) => !p.features.approval && (name === 'anchored' ? p.features.path || p.features.url || p.features.code || p.features.pasted : p.features[name]));
+      if (good) return { ...row, status, example: { sessionId: good.sessionId, title: good.title, at: good.at, text: good.text } };
+    }
+    return { ...row, status };
+  });
 }

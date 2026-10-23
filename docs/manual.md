@@ -377,13 +377,36 @@ The prompts and the answers come in order, under a heading for each speaker. Too
 
 ### Reviewing your prompts with Claude
 
-The package comes with a Claude Code skill, `prompt-coach`, that reads your recordings and tells you how to prompt better. It looks at token use and the models used, how the tools were used, and where Claude wavered or took something back, and traces each to what the prompts left out: what "done" means, the scope, the error itself. Each finding comes with the moment it happened, a rewrite, and why the rewrite works.
+This repository is also a Claude Code plugin, `ccrec`, with one skill, `prompt-coach`, that reads your recordings and tells you how to prompt better. It looks at token use and the models used, how the tools were used, and where Claude wavered or took something back, and traces each to what the prompts left out: what "done" means, the scope, the error itself. Each finding comes with the moment it happened, a rewrite, and why the rewrite works.
+
+Install it as a Claude Code plugin, in Claude Code (2.1.275 or later):
+
+```text
+/plugin install ccrec --marketplace wfukatsu/claude-code-recorder
+```
+
+On an older Claude Code, add the marketplace first: `/plugin marketplace add wfukatsu/claude-code-recorder`, then `/plugin install ccrec@claude-code-recorder`. The skill reads through the `ccrec` you installed with npm, so install and set that up first. Without the plugin, a link to the skill in the installed package works too:
 
 ```bash
 ln -s "$(npm root -g)/claude-code-recorder/skills/prompt-coach" ~/.claude/skills/prompt-coach
 ```
 
-Then ask Claude Code something like "review my prompts from the last week". It reads the last 7 days by default, or the sessions you name, through `ccrec` alone (nothing is changed), and writes `prompt-review-<date>.md` into the working directory. The report quotes your prompts, so it stays on your machine.
+Run it as `/ccrec:prompt-coach` (or `/prompt-coach` when linked), or ask Claude Code something like "review my prompts". Two optional arguments say what to review and from when:
+
+| Argument | Values |
+|---|---|
+| What | `current` (this session), `all` (all your sessions), or a session id |
+| From when | `last` (since the last review of the same target), `7d`, `30d`, `whole` (the whole session), or a date `YYYY-MM-DD` |
+
+What is not given is asked first, with these defaults: this session; since the last review of it, or with none, the whole session (for all sessions, the last 7 days).
+
+The report is laid out as:
+
+1. **Security**, always there: credentials put into prompts, named by kind and masked (`ghp_****`; a `[REDACTED]` ccrec put in when recording counts too, since the value was sent to Claude before it was masked), confidential material (a "confidential" marking, card numbers, lists of email addresses), and text in tool results or pastes that tried to steer Claude — "ignore the previous instructions", "do not tell the user" — with where it came from and what Claude answered next. Found in a session that ran with permissions bypassed, it is the most severe.
+2. **Since the last review**: each of its findings, how often it came up then and now, and whether it improved; an improvement in what prompts carry comes with a prompt of yours that now does.
+3. **Suggestions**, from what happened in the period: what happened, what in the prompt led to it, a rewrite, and why the rewrite works.
+
+It reads through `ccrec` alone; nothing in the database changes. Reports go to `~/.ccrec/prompt-coach/reports/` and the record of each review to `~/.ccrec/prompt-coach/runs/`, both readable by you only, since they quote your prompts.
 
 ## 5. Deleting recordings
 

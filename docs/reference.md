@@ -182,6 +182,8 @@ npm pack        # the package (.tgz), built
 ```
 
 - `bin/`, `src/` — the CLI and the hook, in Node, with no dependencies
+- `skills/prompt-coach/` — the Claude Code skill, and `.claude-plugin/marketplace.json`, which makes the repository a plugin marketplace offering it as the plugin `ccrec`. The plugin carries no version of its own, so Claude Code updates it by commit. Installed as a plugin, the skill is a copy of the repository without the built engine; it then reads through the `ccrec` on PATH
+  - `scripts/analyze.mjs` counts what can be counted (`lib.mjs`), `scripts/history.mjs` keeps each review in `$CCREC_HOME/prompt-coach/` (0700): `runs/<time>.json` holds the target (`{"kind":"session","sessionId":…}` or `{"kind":"all"}`), the period (`since`, `until`), the rate of each finding (`rates`: a share of work prompts, per 10 of them, or per session), and the findings the report made, by an id from `FINDINGS` in `lib.mjs`; `reports/prompt-review-<date>.md` is the report. The next review over the same target compares its rates with these
 - `engine/` — the recording engine, in Java: `RecordStore` (the storage port), `ScalarDbRecordStore` (its ScalarDB implementation), `TranscriptParser`, `Ingester`, `Redactor`, and `Syncer` (the way out to a company-wide collector; not implemented, it does nothing)
 
 Dependency versions (checked against each registry on 2026-10-07): ScalarDB 3.19.1, Shadow 9.6.1, JUnit 6.1.3, Gradle 9.8.0. Jackson 2.18.7 and SLF4J 1.7.36 are the versions ScalarDB 3.19.1 itself resolves.
