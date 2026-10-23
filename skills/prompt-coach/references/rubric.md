@@ -1,278 +1,316 @@
-# 判断の基準
+# How to judge
 
-フラグの種類ごとに、次の 4 つをまとめる。
+For each type of flag, this gives four things:
 
-- **意味**: そのフラグが何を示すか
-- **問題でない場合**: 当たれば捨てる
-- **人間側の改善**: どう指示を変えるか
-- **なぜよいか**: レポートの「なぜよいか」は、ここに書いた理由をその場面に当てはめて書く
+- **Meaning**: what the flag points at
+- **Not a problem when**: if it matches, drop the flag
+- **What the human can change**: how to change the instructions
+- **Why it works**: the report's "Why it works" applies the reason given here to the moment at hand
 
-セキュリティを最初に置き、前回からの変化の読み方と、指摘の id の一覧をそのあとに置く。最後に、フラグに
-出ない観点（プロンプトの要素）をまとめる。
-
----
-
-## セキュリティ（security）
-
-レポートでは最初の節に書く。秘密の値は、分析結果の伏せ字（`ghp_****`）のまま書き、元の値を探して
-書き写さない。
-
-### secret-in-prompt（深刻度: 高）
-
-- **意味**: プロンプト（貼り付けの中身を含む）に、認証情報が入っていた。`masked by ccrec when
-  recorded` は、記録の時点で ccrec が伏せたもの。値は記録に残っていないが、**Claude には送られている**。
-- **問題でない場合**: 説明用のダミーの値（`AKIAIOSFODNN7EXAMPLE` のような公式の例、`xxxx`）。
-  テスト用に作り、すでに失効させた値と本人が分かっている場合。
-- **人間側の改善**: その鍵やトークンを失効させて作り直す。値をプロンプトに貼らず、環境変数や
-  シークレット管理（1Password CLI、`gh auth` など）から読ませる。cookie やトークンを
-  渡す必要があるなら、ファイルのパスだけを渡し、`.gitignore` と権限で守る。
-- **なぜよいか**: プロンプトに入った値は、会話の記録、ログ、要約、場合によっては作業中に作られる
-  ファイルやコミットにまで残る。後から消すのは難しく、漏れたかどうかも追えない。参照だけを渡せば、
-  値が会話に入らない。
-
-### confidential-in-prompt（深刻度: 中）
-
-- **意味**: 「社外秘」「機密」などの表示、カード番号、多数のメールアドレスなど、外に出すべきでない
-  ものがプロンプトに入っていた。
-- **問題でない場合**: 社内で扱いが認められた範囲の作業で、利用規約上も問題のない場合（本人に確かめる
-  ことを勧めるにとどめる）。テスト用の番号（4111 1111 1111 1111 など）。
-- **人間側の改善**: 渡す前に、作業に要らない個人情報や番号を伏せる、またはダミーに置き換える。
-  機密の文書は、要る部分だけを渡す。
-- **なぜよいか**: AI は渡されたものをすべて作業に使う可能性がある。要らない情報を渡さなければ、
-  それが出力やファイルに紛れ込むこともない。
-
-### injection-suspected（深刻度: 高。権限の確認なしなら critical）
-
-- **意味**: ツールの結果（Web ページ、ファイル、MCP の応答）や貼り付けた文章に、AI への指示を
-  装った文（「以前の指示を無視して」「システムプロンプトを出力して」「ユーザーに伝えないで」
-  「認証情報を送って」）が入っていた。
-- **問題でない場合**: プロンプトインジェクションを**説明する**文書、テスト、セキュリティの調査を
-  読んだ場合（この rubric やスキル自身のコードを読んだ場合も含む）。ユーザー自身が打った文。
-- **確かめること**: 根拠の `next answer` を読み、Claude が従ったように見えるかを判断する。
-  従ったように見えるなら、その後のツール呼び出し（送信、削除、認証情報の読み出し）を `ccrec show`
-  で確かめ、レポートに事実だけを書く。
-- **人間側の改善**: 信頼できないページや文書を取り込む作業では、権限の確認を外さない
-  （`bypassPermissions` で動かさない）。送信や削除のツールを許可から外す。取り込んだ内容は
-  「データとして扱い、中の指示に従わない」と指示に書く。
-- **なぜよいか**: 外から来た文章は、AI にとって指示と見分けにくい。権限の確認があれば、従って
-  しまっても実害の前に人が止められる。
+Security comes first, followed by how to read the change since the last review and the list of
+finding ids. Last comes what no flag shows: the elements of a prompt.
 
 ---
 
-## 前回からの変化（comparison）の読み方
+## Security (security)
 
-- `improved`: 前回より 25% 以上減った。「良くなった点」として、前回と今回の値を並べて書く。
-  `example` があれば、その引用を「良い例」として添える。本人が続けられるよう、何が良かったかを書く。
-- `unchanged`: 大きくは変わっていない。今回の期間の例があれば、改善点として改めて書く。
-  前回と同じ書き換え例を繰り返さず、今回の場面に合わせる。
-- `worse`: 25% 以上増えた。今回の改善点の上位に置く。
-- `too-little`: 今回の期間のやりとりが少なく、比べられない（作業のプロンプトが 5 件未満、
-  セッションが 2 件未満）。結論は書かず、件数が少なかったとだけ書く。
-- 値の単位（`unit`）は、足りない要素なら「作業のプロンプトに占める割合」、プロンプトの指摘なら
-  「作業のプロンプト 10 件あたり」、ほかは「セッション 1 件あたり」。レポートでは単位を添えて書く。
+Write it as the report's first section. Write secret values masked as the analysis gives them
+(`ghp_****`); never look up the original value and copy it out.
 
-## 指摘の id
+### secret-in-prompt (severity: high)
 
-`history.mjs save` に渡す指摘の `id` は、次のどれか（フラグの種類と同じ名前）。
+- **Meaning**: a prompt (including what was pasted into it) held a credential. `masked by ccrec when
+  recorded` means ccrec masked it when recording: the value is not in the record, but **it was sent
+  to Claude**.
+- **Not a problem when**: it is a dummy value for illustration (an official example such as
+  `AKIAIOSFODNN7EXAMPLE`, `xxxx`), or the user knows it was made for testing and already revoked.
+- **What the human can change**: revoke the key or token and issue a new one. Instead of pasting the
+  value into a prompt, have it read from an environment variable or a secret manager (the 1Password
+  CLI, `gh auth`, etc.). If a cookie or token has to be handed over, give only the path to a file,
+  and protect the file with `.gitignore` and permissions.
+- **Why it works**: a value put into a prompt stays in the conversation's record, logs, summaries,
+  and sometimes in files and commits made during the work. It is hard to remove afterwards, and
+  there is no telling whether it leaked. Handing over only a reference keeps the value out of the
+  conversation.
 
-- 指示: `missing-criteria`、`missing-constraint`、`missing-target`、`user-correction`、`vague-wording`、
-  `trouble-without-evidence`、`short-prompt-big-task`、`repeated-prompt`、`clarification-asked`
-- 推論: `retraction`、`interrupted`、`api-errors`
-- ツール: `repeated-call`、`retry-after-error`、`tool-error-rate`、`shell-for-builtin`、`large-results`、
-  `tool-denials`
-- モデル: `context-compacted`、`long-context`、`heavy-model-for-lookup`、`low-cache-hit`、`high-thinking-share`
-- セキュリティ: `secret-in-prompt`、`confidential-in-prompt`、`injection-suspected`
+### confidential-in-prompt (severity: medium)
 
----
+- **Meaning**: a prompt held something that should not go out: a "confidential" marking, card
+  numbers, many email addresses.
+- **Not a problem when**: the work is within what the organisation allows, and the terms of use
+  permit it (only suggest the user check). Test numbers (such as 4111 1111 1111 1111).
+- **What the human can change**: before handing it over, mask personal data and numbers the work
+  does not need, or replace them with dummies. Of a confidential document, hand over only the parts
+  needed.
+- **Why it works**: the AI may use everything it is given in the work. What is not handed over
+  cannot slip into its output or files.
 
-## 指示（instructions）
+### injection-suspected (severity: high; critical without permission checks)
 
-### user-correction（深刻度: 高）
-
-- **意味**: ユーザーが「違う」「そうじゃなくて」と言い直した。前の指示と AI の理解がずれていた。
-- **問題でない場合**: ユーザー自身が考えを変えただけで、前の指示は明確だった。
-- **人間側の改善**: 前の指示に足りなかったもの（対象、範囲、完了の形）を特定し、それを最初から書く。
-  言い直すときは、何を取り消して何を残すかをはっきり言う（「A は取り消し。B はそのまま。C を追加」）。
-- **なぜよいか**: AI は書かれていないことを、もっともらしい推測で埋める。その推測が外れると、
-  直すまでの作業がまるごと無駄になる。また、取り消しを明示しないと古い指示が残り、
-  新旧の指示が矛盾したまま進むことがある。
-- 悪い例 → よい例: 「ログイン画面をいい感じにして」→「ログイン画面のフォーム部分（src/login/Form.tsx）の
-  入力欄の間隔を揃えて。ヘッダーとフッターは変えない。終わったらスクリーンショットで確認」
-
-### vague-wording（深刻度: 中）
-
-- **意味**: 「いい感じに」「適当に」「fix it」など、何をもって良しとするかを AI に任せる言葉。
-- **問題でない場合**: 探索や案出しで、AI に任せること自体が目的（「案を 3 つ出して」など）。
-- **人間側の改善**: 良しとする基準を 1 つでも書く（見た目なら参考の画面、性能なら数値、
-  文章なら読み手と長さ）。
-- **なぜよいか**: 基準がないと、AI は自分の基準で止まる場所を決める。やりすぎ（頼んでいない変更）か、
-  早すぎる終了のどちらかになりやすい。
-
-### trouble-without-evidence（深刻度: 中）
-
-- **意味**: 不具合を伝えたが、エラーの全文、ログ、ファイルと行、再現手順のどれも付いていない。
-- **問題でない場合**: 直前のやりとりで、AI がすでにそのエラーを見ている（同じ会話の続き）。
-- **人間側の改善**: 見えているものを**要約せずに**そのまま貼る。エラー全文、実行したコマンド、期待した結果と
-  実際の結果、どのファイルのどこか。画面の問題なら、スクリーンショットと場所。
-- **なぜよいか**: AI は症状から原因を推測する。手がかりが少ないほど、調べ回るツール呼び出しが増え、
-  的外れな仮説から始めやすい。原文のエラーは、要約よりも多くの手がかり（スタックトレース、
-  バージョン、パス）を含む。
-
-### short-prompt-big-task（深刻度: 中）
-
-- **意味**: 短いプロンプト 1 つで、多数のツール呼び出しが続いた。
-- **問題でない場合**: 直前に計画を合意している。または、AI が最初に質問や計画を出してから進めている。
-  あるいは、短くても対象と完了条件が明確（「npm test を通して」など）。
-- **人間側の改善**: 大きな作業は、目的、範囲、完了条件を書く。または「まず計画を出して、承認してから
-  進めて」と段階を分ける。
-- **なぜよいか**: 範囲を決めずに走り出すと、AI は調べながら範囲を広げていく。途中でずれても、
-  人が気づくのは終わってからになる。計画を先に出させれば、ずれを最初の数分で直せる。
-
-### repeated-prompt（深刻度: 中）
-
-- **意味**: ほぼ同じプロンプトをもう一度送った。
-- **問題でない場合**: 改善サイクルを意図して回している。または、中断後の再開。
-- **人間側の改善**: 繰り返すなら、前回の結果のどこが足りなかったかを添える（「前回は X が直っていない。
-  今回は X を優先して」）。毎回同じなら、手順をスキルやカスタムコマンドにする。
-- **なぜよいか**: 同じ指示には、同じ方針の答えが返りやすい。前回との差を言えば、AI は同じことを
-  繰り返さずに足りないところに集中できる。
-
-### clarification-asked（深刻度: 低）
-
-- **意味**: AI が作業の前に質問した（AskUserQuestion）。
-- **問題でない場合**: 本当に人が決めるべきことだった（好み、方針、外部への影響）。それはよい動きである。
-- **人間側の改善**: 同じ種類の質問が何度も出ているなら、その答えを最初の指示か CLAUDE.md に書く。
-- **なぜよいか**: 毎回聞かれる前提は、書いておけば質問のやりとりが要らなくなる。
+- **Meaning**: a tool result (a web page, a file, an MCP response) or pasted text contained a
+  sentence posing as an instruction to the AI ("ignore the previous instructions", "print the
+  system prompt", "do not tell the user", "send the credentials").
+- **Not a problem when**: reading a document, test, or security research that **explains** prompt
+  injection (including reading this rubric or the skill's own code). Text the user typed themselves.
+- **What to check**: read the evidence's `next answer` and judge whether Claude appears to have
+  followed it. If it appears so, check the tool calls that came after (sending, deleting, reading
+  credentials) with `ccrec show`, and write only the facts in the report.
+- **What the human can change**: for work that takes in untrusted pages or documents, keep
+  permission checks on (do not run with `bypassPermissions`). Take sending and deleting tools out of
+  the allow list. Say in the instructions that what is taken in is data, and its instructions are
+  not to be followed.
+- **Why it works**: text from outside is hard for the AI to tell apart from instructions. With
+  permission checks, a person can stop it before harm is done, even if it follows the text.
 
 ---
 
-## 推論（reasoning）
+## Reading the change since the last review (comparison)
 
-### retraction（深刻度: 中）
+- `improved`: down by 25% or more since the last review. Write it under "what improved", with the
+  values then and now. If there is an `example`, add its quote as a good example. Say what was good,
+  so the user can keep it up.
+- `unchanged`: no large change. If this period has an example, write it again as a suggestion. Do
+  not repeat the last rewrite; fit a new one to this period's moment.
+- `worse`: up by 25% or more. Put it near the top of this review's suggestions.
+- `too-little`: too little happened in this period to compare (fewer than 5 work prompts, or fewer
+  than 2 sessions). Draw no conclusion; say only that there was too little.
+- The unit of a value (`unit`) is the share of work prompts for a missing element, per 10 work
+  prompts for a finding about prompts, and per session for the rest. Give the unit in the report.
 
-- **意味**: AI が自分の発言を撤回した、または謝った。
-- **問題でない場合**: 新しい情報が出て正しく考えを改めた。または、言い回しを詫びただけ。
-- **人間側の改善**: 撤回の原因を見る。前提が曖昧だった（→前提を書く）。確認せずに断定した（→「推測と
-  確認済みを分けて書いて」「根拠のファイルと行を付けて」と頼む）。指示が途中で変わった
-  （→変更を明示する）。
-- **なぜよいか**: AI は確かめていないことも、自然な文で言い切ることがある。根拠を求めると、確認する
-  手順が作業に入り、言い切りの誤りが減る。
+## Finding ids
 
-### interrupted（深刻度: 中）
+The `id` of a finding passed to `history.mjs save` is one of these (the same names as the flag
+types).
 
-- **意味**: ユーザーが作業を中断した。
-- **問題でない場合**: 単に急ぎの別件が入った。
-- **人間側の改善**: 中断の直前に AI がしていたことを見る。指示と違う方向に進んでいたなら、その方向を
-  最初に禁じる（「X には手を付けないで」）。長すぎたなら、区切りで止まるよう頼む。
-- **なぜよいか**: 中断はずれの最も強い合図。そのずれを生んだ指示の欠けを埋めれば、次は中断せずに済む。
-
-### api-errors（深刻度: 低）
-
-- 参考として触れるだけでよい。過負荷やレート制限なら、人間側の改善はほとんどない。
-  コンテキスト長の超過なら、context-compacted と同じ改善になる。
-
----
-
-## ツール（tools）
-
-### repeated-call / retry-after-error（深刻度: 中）
-
-- **意味**: 間に何も変えずに、同じ入力で同じツールを何度も呼んだ。または、失敗したのと同じ呼び出しを
-  そのまま繰り返した。
-- **問題でない場合**: 外部の状態を待っている（CI、デプロイ）。または、一時的なエラーで再試行が正しい。
-- **人間側の改善**: 原因が「場所が分からず探し回った」なら、パスやコマンドを最初に渡す。
-  原因が「環境の問題」（権限、未インストール）なら、前提を先に伝えるか、環境を整えてから頼む。
-- **なぜよいか**: ツールの結果は会話に積み上がり、毎回の応答の入力トークンとして読み直される。
-  無駄な呼び出しは、その場の時間だけでなく、以降すべての応答のコストを増やす。
-
-### tool-error-rate（深刻度: 中）
-
-- **意味**: 特定のツールが高い割合で失敗した。
-- **問題でない場合**: テストを意図的に失敗させている（TDD）。
-- **人間側の改善**: 失敗の中身を見る。存在しないパスや権限の拒否が多いなら、作業する場所と、
-  使ってよいコマンドを最初に伝える。
-- **なぜよいか**: 失敗のたびに、AI は原因の調査と回り道を挟む。前提を渡せば、その分の往復が要らない。
-
-### shell-for-builtin / large-results（深刻度: 低）
-
-- **意味**: ファイルの読み書きや検索を、シェルの cat / grep / find で行った。または、巨大な結果が
-  会話に入った。
-- **問題でない場合**: 利用者の設定（CLAUDE.md など）が、シェルを使うよう指示している。
-  または、パイプでの加工が必要だった。
-- **人間側の改善**: 巨大な出力が入ったなら、「件数だけ」「先頭 50 行だけ」など、欲しい量を指定する。
-  巨大なログは、ファイルのパスを渡して必要な部分を探させる。
-- **なぜよいか**: 一度会話に入った出力は、圧縮されるまで毎回読み直される。必要な部分だけを
-  入れれば、コンテキストが長持ちし、圧縮で前の指示が薄まるのも防げる。
-
-### tool-denials（深刻度: 低）
-
-- 権限で拒否された呼び出しが多いなら、許可の設定を見直すか、使ってよい範囲を最初に伝えるよう勧める。
+- Instructions: `missing-criteria`, `missing-constraint`, `missing-target`, `user-correction`,
+  `vague-wording`, `trouble-without-evidence`, `short-prompt-big-task`, `repeated-prompt`,
+  `clarification-asked`
+- Reasoning: `retraction`, `interrupted`, `api-errors`
+- Tools: `repeated-call`, `retry-after-error`, `tool-error-rate`, `shell-for-builtin`,
+  `large-results`, `tool-denials`
+- Model: `context-compacted`, `long-context`, `heavy-model-for-lookup`, `low-cache-hit`,
+  `high-thinking-share`
+- Security: `secret-in-prompt`, `confidential-in-prompt`, `injection-suspected`
 
 ---
 
-## モデルとトークン（model）
+## Instructions (instructions)
 
-### context-compacted（深刻度: 中）
+### user-correction (severity: high)
 
-- **意味**: 会話が長くなり、コンテキストが圧縮された。
-- **問題でない場合**: 長い作業を意図的に 1 セッションで続けている。かつ、圧縮の前後で問題が起きていない。
-- **人間側の改善**: 目的が変わったらセッションを分ける（`/clear` や新しいセッション）。続ける必要が
-  あるなら、区切りで「ここまでの決定事項」を AI にまとめさせてから進める。
-- **なぜよいか**: 圧縮は要約なので、細かい指示や決定が落ちることがある。圧縮のあとに
-  「前に言ったのに」が起きやすい。目的ごとにセッションを分けると、毎回の入力も小さく保てる。
+- **Meaning**: the user corrected course ("no", "that's not it"). The previous instruction and the
+  AI's understanding of it had drifted apart.
+- **Not a problem when**: the user simply changed their mind, and the previous instruction was clear.
+- **What the human can change**: pin down what the previous instruction lacked (the target, the
+  scope, what done looks like) and write it from the start. When correcting, say plainly what is
+  withdrawn and what stays ("Drop A. Keep B as it is. Add C").
+- **Why it works**: the AI fills in what is not written with plausible guesses. When a guess misses,
+  all the work until the correction is wasted. And unless a withdrawal is explicit, the old
+  instruction lingers, and the work goes on with the old and new instructions contradicting each
+  other.
+- Bad → good: "Make the login screen look nice" → "In the login form (src/login/Form.tsx), even out
+  the spacing between the inputs. Leave the header and footer alone. Check it with a screenshot when
+  done"
 
-### long-context（深刻度: 中）
+### vague-wording (severity: medium)
 
-- **意味**: 1 回の応答で読むコンテキスト（入力とキャッシュ）が 30 万トークン以上になった。圧縮が
-  起きていなくても、目的の違う作業を 1 つのセッションに積み重ねていると、ここに出る。詳細には、
-  最大のコンテキスト、応答 1 回あたりの平均、キャッシュから読んだ合計がある。
-- **問題でない場合**: 大きな文書やコードを一度に扱う必要がある作業で、セッションを分けると前提を
-  渡し直す手間のほうが大きい場合。
-- **人間側の改善**: 目的が変わる区切り（機能をコミットした、調査を終えた）で、決定事項と次に触る
-  ファイルをまとめさせ、新しいセッションで続ける。大きなツールの結果（ログ、画像、長いファイル）は、
-  要る部分だけを読ませる。
-- **なぜよいか**: 会話に入ったものは、毎回の応答で読み直される。キャッシュで単価は下がるが、量が
-  大きいと時間とコストに効き、前の作業の細部に引きずられることも増える。決定事項だけを引き継げば、
-  毎回の入力が小さく保てる。
+- **Meaning**: words that leave the standard of "good" to the AI: "make it nice", "whatever works",
+  "fix it".
+- **Not a problem when**: exploring or brainstorming, where leaving it to the AI is the point ("give
+  me three ideas").
+- **What the human can change**: give at least one standard of "good" (for looks, a reference
+  screen; for performance, a number; for writing, the reader and the length).
+- **Why it works**: without a standard, the AI decides by its own where to stop. It tends either to
+  overdo it (changes nobody asked for) or to stop too soon.
 
-### heavy-model-for-lookup（深刻度: 中）
+### trouble-without-evidence (severity: medium)
 
-- **意味**: 上位モデル（Opus など）のサブエージェントが、読む、探すだけの作業をした。
-- **問題でない場合**: 探しながら高度な判断が要った（設計の比較、セキュリティの調査）。
-- **人間側の改善**: 調べ物や機械的な作業を頼むときは、軽いモデルを使うよう指定する（「調査は
-  Haiku/Sonnet のサブエージェントで」）。サブエージェントの既定のモデルの設定を見直すのもよい。
-- **なぜよいか**: 上位モデルはトークン単価が高い。判断の質が結果を左右しない作業では、
-  軽いモデルでも結果はほぼ同じで、速く安い。
+- **Meaning**: a problem was reported with none of the full error, logs, file and line, or steps to
+  reproduce.
+- **Not a problem when**: the AI already saw the error earlier in the same conversation.
+- **What the human can change**: paste what you see **as is, without summarising**: the full error,
+  the command run, the expected and actual result, which file and where. For a problem on screen, a
+  screenshot and where it is.
+- **Why it works**: the AI guesses the cause from the symptoms. The fewer the clues, the more tool
+  calls it spends searching, and the likelier it starts from a wrong hypothesis. The error itself
+  carries more clues than a summary of it (the stack trace, versions, paths).
 
-### low-cache-hit / high-thinking-share（深刻度: 低）
+### short-prompt-big-task (severity: medium)
 
-- **low-cache-hit**: キャッシュ読み取りの割合が低い。セッションを頻繁に作り直す、CLAUDE.md や
-  システムプロンプトを頻繁に変える、長い間を空けて再開する、などでキャッシュが切れる。
-  同じ前提で続く作業は、同じセッションで続けると安くなる。
-- **high-thinking-share**: 出力の多くが思考だった。難しい問題なら正しい。単純な作業で多いなら、
-  指示の曖昧さで迷っている可能性がある。迷っている内容を抜粋で確かめ、指示の改善に結びつける。
+- **Meaning**: one short prompt was followed by many tool calls.
+- **Not a problem when**: a plan was agreed just before. Or the AI first asked questions or laid out
+  a plan before going ahead. Or the prompt, though short, had a clear target and definition of done
+  ("make npm test pass").
+- **What the human can change**: for a large task, write the goal, the scope, and what done looks
+  like. Or split it into stages: "First show a plan, and go ahead once I approve it".
+- **Why it works**: started without a scope, the AI widens it as it investigates. Even if it drifts,
+  a person notices only when it is over. Having it show a plan first lets the drift be fixed in the
+  first few minutes.
+
+### repeated-prompt (severity: medium)
+
+- **Meaning**: nearly the same prompt was sent again.
+- **Not a problem when**: running an improvement loop on purpose. Or resuming after an interruption.
+- **What the human can change**: when repeating, add what fell short last time ("Last time X was not
+  fixed. Put X first this time"). If it is the same every time, turn the steps into a skill or
+  custom command.
+- **Why it works**: the same instruction tends to get an answer along the same lines. Saying how it
+  differs from last time lets the AI focus on what is missing instead of repeating itself.
+
+### clarification-asked (severity: low)
+
+- **Meaning**: the AI asked a question before working (AskUserQuestion).
+- **Not a problem when**: it really was a person's call (a preference, a policy, an outside effect).
+  That is a good move.
+- **What the human can change**: if the same kind of question keeps coming up, put its answer in the
+  first instruction or in CLAUDE.md.
+- **Why it works**: an assumption asked about every time needs no back-and-forth once written down.
 
 ---
 
-## フラグに出ない観点: プロンプトの要素
+## Reasoning (reasoning)
 
-`prompts[].features` を、作業を頼むプロンプト（承認や相づちでないもの）について見る。
+### retraction (severity: medium)
 
-| 要素 | 欠けると起きやすいこと | 足すとよい理由 |
+- **Meaning**: the AI took back something it said, or apologised.
+- **Not a problem when**: new information came up and it rightly changed its mind. Or it only
+  apologised for its wording.
+- **What the human can change**: look at the cause of the retraction. An unclear assumption (→ write
+  the assumption). Asserting without checking (→ ask it to "separate guesses from what is
+  confirmed" and "give the file and line it rests on"). The instruction changed midway (→ make the
+  change explicit).
+- **Why it works**: the AI may state unchecked things in confident, natural sentences. Asking for
+  grounds puts checking into the work, and confident mistakes drop.
+
+### interrupted (severity: medium)
+
+- **Meaning**: the user stopped the work.
+- **Not a problem when**: something urgent simply came up.
+- **What the human can change**: look at what the AI was doing just before. If it was heading
+  somewhere other than instructed, rule that direction out from the start ("Don't touch X"). If it
+  ran too long, ask it to stop at checkpoints.
+- **Why it works**: an interruption is the strongest sign of drift. Filling the gap in the
+  instructions that caused it avoids the next interruption.
+
+### api-errors (severity: low)
+
+- A brief mention for reference is enough. For overload or rate limits, there is little the human
+  can change. For exceeding the context length, the change is the same as for context-compacted.
+
+---
+
+## Tools (tools)
+
+### repeated-call / retry-after-error (severity: medium)
+
+- **Meaning**: the same tool was called several times with the same input and nothing changed in
+  between. Or a failed call was repeated as is.
+- **Not a problem when**: waiting on outside state (CI, a deploy). Or retrying a transient error was
+  right.
+- **What the human can change**: if the cause was "searched around not knowing where", hand over the
+  path or command first. If the cause was "the environment" (permissions, not installed), state the
+  premise first, or set up the environment before asking.
+- **Why it works**: tool results pile up in the conversation and are read again as input tokens at
+  every answer. A wasted call costs not only its own time but every later answer too.
+
+### tool-error-rate (severity: medium)
+
+- **Meaning**: a particular tool failed at a high rate.
+- **Not a problem when**: tests were made to fail on purpose (TDD).
+- **What the human can change**: look at what failed. If many failures were missing paths or denied
+  permissions, say first where to work and which commands are allowed.
+- **Why it works**: at every failure the AI fits in an investigation and a detour. Handing over the
+  premise saves those round trips.
+
+### shell-for-builtin / large-results (severity: low)
+
+- **Meaning**: files were read, written, or searched with shell cat / grep / find. Or a huge result
+  entered the conversation.
+- **Not a problem when**: the user's settings (CLAUDE.md, etc.) say to use the shell. Or processing
+  through a pipe was needed.
+- **What the human can change**: when huge output came in, say how much is wanted ("just the count",
+  "just the first 50 lines"). For a huge log, hand over its path and have it find the part needed.
+- **Why it works**: output that has entered the conversation is read again every time until
+  compacted. Letting in only what is needed makes the context last, and keeps compaction from
+  thinning out earlier instructions.
+
+### tool-denials (severity: low)
+
+- If many calls were denied by permissions, suggest reviewing the allow settings or stating the
+  allowed scope at the start.
+
+---
+
+## Model and tokens (model)
+
+### context-compacted (severity: medium)
+
+- **Meaning**: the conversation grew long and the context was compacted.
+- **Not a problem when**: a long piece of work was deliberately kept in one session, and nothing went
+  wrong around the compaction.
+- **What the human can change**: when the goal changes, split the session (`/clear` or a new
+  session). If it has to continue, have the AI sum up "the decisions so far" at a checkpoint before
+  going on.
+- **Why it works**: compaction is a summary, so fine instructions and decisions can drop out. "But
+  I told you before" tends to happen after compaction. Splitting sessions by goal also keeps each
+  input small.
+
+### long-context (severity: medium)
+
+- **Meaning**: the context read for one answer (input plus cache) reached 300,000 tokens or more.
+  Even without compaction, this shows up when work with different goals piles up in one session.
+  The detail gives the largest context, the average per answer, and the total read from cache.
+- **Not a problem when**: the work has to handle a large document or codebase at once, and handing
+  the premises over again to a new session would cost more.
+- **What the human can change**: at a point where the goal changes (a feature committed, an
+  investigation finished), have it sum up the decisions and the files to touch next, and continue in
+  a new session. For large tool results (logs, images, long files), have it read only the part
+  needed.
+- **Why it works**: what enters the conversation is read again at every answer. The cache lowers the
+  unit price, but at this size it still costs time and money, and the details of earlier work drag
+  on more. Carrying over only the decisions keeps each input small.
+
+### heavy-model-for-lookup (severity: medium)
+
+- **Meaning**: a sub-agent on a top-tier model (Opus, etc.) did nothing but read and search.
+- **Not a problem when**: the search needed serious judgement along the way (comparing designs, a
+  security investigation).
+- **What the human can change**: when asking for lookups or mechanical work, say to use a lighter
+  model ("research with a Haiku/Sonnet sub-agent"). Reviewing the default model for sub-agents also
+  helps.
+- **Why it works**: top-tier models cost more per token. For work whose result does not depend on
+  the quality of judgement, a lighter model gives almost the same result, faster and cheaper.
+
+### low-cache-hit / high-thinking-share (severity: low)
+
+- **low-cache-hit**: little was read from the cache. Recreating sessions often, changing CLAUDE.md
+  or the system prompt often, or resuming after a long break all break the cache. Work on the same
+  premises is cheaper continued in the same session.
+- **high-thinking-share**: most of the output was thinking. For a hard problem, that is right. If it
+  is high for simple work, the AI may be wavering over an unclear instruction. Check what it wavered
+  over in the excerpts, and tie it to a change in the instructions.
+
+---
+
+## What no flag shows: the elements of a prompt
+
+Look at `prompts[].features` for prompts that ask for work (not approvals or acknowledgements).
+
+| Element | What tends to happen without it | Why adding it helps |
 |---|---|---|
-| 目的・完了条件（criteria） | やりすぎ、早すぎる終了、確認なしの完了報告 | AI が自分で止まる場所と、確かめる方法を持てる |
-| 制約・範囲（constraint） | 頼んでいない変更、触ってはいけない場所の変更 | 変えてよい範囲が分かり、手戻りが減る |
-| 対象（path / url / code） | 探し回るツール呼び出し、別の場所の変更 | 最初から正しい場所で作業できる |
-| エビデンスの原文（code） | 推測からの調査、的外れな仮説 | 要約で落ちる手がかり（トレース、バージョン）が残る |
+| Goal / what done means (criteria) | Overdoing it, stopping too soon, reporting done without checking | The AI has a place to stop and a way to check |
+| Constraint / scope (constraint) | Changes nobody asked for, changes where it should not touch | It knows what it may change, and rework drops |
+| Target (path / url / code) | Tool calls spent searching, changes in the wrong place | It works in the right place from the start |
+| The evidence itself (code) | Investigation from guesses, wrong hypotheses | Clues lost in a summary (traces, versions) are kept |
 
-1 つのプロンプトに全部を書く必要はない。**作業の最初のプロンプト**と**方向を変えるプロンプト**で
-欠けていると効く。
+A prompt need not have all of them. They matter most in **the first prompt of a piece of work** and
+in **a prompt that changes direction**.
 
-## よかった点の探し方
+## Finding what was done well
 
-指摘だけでなく、次のようなよい例があれば根拠つきで書く。本人の型として続けてもらうため。
+Besides findings, write good examples like these, with evidence, so the user keeps them as habits.
 
-- 計画を先に出させて承認してから進めた
-- エラーやログを原文で渡した
-- 完了条件や確認方法を指定した
-- 目的が変わったときにセッションを分けた
+- Had a plan shown first, and went ahead after approving it
+- Handed over errors and logs as they were
+- Said what done looks like, or how to check it
+- Split the session when the goal changed
