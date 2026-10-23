@@ -423,4 +423,25 @@ class UiServerTest {
       }
     }
   }
+  @Test
+  void aSessionIsHandedOverAsAMarkdownFileToSave(@TempDir Path dir) throws Exception {
+    try (RecordStore store = store(dir);
+        UiServer server = new UiServer(store, "acct-alice", 0, TOKEN)) {
+      server.start();
+      String path = "/api/sessions/" + SESSION + "/export.md";
+      assertEquals(401, get(server, path, false).statusCode());
+
+      HttpResponse<String> response = get(server, path + "?lang=ja", true);
+      assertEquals(200, response.statusCode(), response.body());
+      assertTrue(response.headers().firstValue("Content-Type").orElse("").startsWith("text/markdown"));
+      String disposition = response.headers().firstValue("Content-Disposition").orElse("");
+      assertTrue(disposition.startsWith("attachment; filename=\"2026-10-07_Listing-files_11111111.md\""), disposition);
+      assertTrue(response.body().startsWith("# Listing files\n"), response.body());
+      assertTrue(response.body().contains("## ユーザー · "), response.body());
+      assertTrue(response.body().contains("<summary>Bash: <code>ls</code></summary>"), response.body());
+
+      assertFalse(get(server, path + "?tools=0", true).body().contains("<summary>Bash"));
+      assertEquals(404, get(server, "/api/sessions/nope/export.md", true).statusCode());
+    }
+  }
 }

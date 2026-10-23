@@ -349,4 +349,29 @@ class MainTest {
       assertEquals("UsageException", message, String.join(" ", wrong));
     }
   }
+  @Test
+  void aSessionIsExportedAsMarkdownToAFileADirectoryOrTheConsole(@TempDir Path dir) throws IOException {
+    Path home = home(dir);
+    queue(home, "talk", transcript(dir, "talk"), true, null);
+    assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
+    String[] common = {"--account", "acct-1", "--home", home.toString()};
+
+    Path out = dir.resolve("exports");
+    String said = printed(0, "export", "talk", "--out", out.toString(), common[0], common[1], common[2], common[3]);
+    try (var files = Files.list(out)) {
+      List<Path> written = files.toList();
+      assertEquals(1, written.size());
+      assertTrue(written.get(0).getFileName().toString().matches("\\d{4}-\\d{2}-\\d{2}_talk\\.md"), written.toString());
+      assertTrue(said.contains("exported to " + written.get(0)), said);
+      String markdown = Files.readString(written.get(0));
+      assertTrue(markdown.contains("## User · ") && markdown.contains("\n\nhello\n\n"), markdown);
+    }
+
+    Path file = dir.resolve("one.md");
+    printed(0, "export", "talk", "--out", file.toString(), "--lang", "ja", common[0], common[1], common[2], common[3]);
+    assertTrue(Files.readString(file).contains("## ユーザー · "));
+
+    assertTrue(printed(0, "export", "talk", "--out", "-", common[0], common[1], common[2], common[3]).contains("hello"));
+    assertEquals(1, Main.run(new String[] {"export", "nope", "--out", out.toString(), common[0], common[1], common[2], common[3]}));
+  }
 }

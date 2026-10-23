@@ -6,6 +6,13 @@
 const TEXT = {
   ja: {
     deleteSession: 'セッションを削除',
+    exportMarkdown: 'Markdown で書き出す',
+    exportTitle: 'このセッションを Markdown で書き出す',
+    exportWhat: 'プロンプトと応答に加えて、含めるもの:',
+    exportTools: 'ツール呼び出しとその結果',
+    exportThinking: '思考',
+    exportNote: '本文は記録したとおりです（秘密情報の伏せ字も記録時のまま）。ツールの入力と結果は 1 件 2 万文字まで含めます。',
+    doExport: '書き出す',
     deleteSelected: (n) => `選択した ${n} 件を削除`,
     selected: (n) => `${n} 件を選択中`,
     clearSelection: '選択を解除',
@@ -203,6 +210,13 @@ const TEXT = {
   },
   en: {
     deleteSession: 'Delete session',
+    exportMarkdown: 'Export as Markdown',
+    exportTitle: 'Export this session as Markdown',
+    exportWhat: 'Besides the prompts and the answers, include:',
+    exportTools: 'Tool calls and their results',
+    exportThinking: 'Thinking',
+    exportNote: 'The text is as recorded, with the secrets the recorder masked still masked. Each tool input and result is kept up to 20,000 characters.',
+    doExport: 'Export',
     deleteSelected: (n) => `Delete the ${n} selected`,
     selected: (n) => `${n} selected`,
     clearSelection: 'Clear selection',
@@ -536,6 +550,46 @@ function confirmDeletion(sessions, done) {
   document.body.append(dialog);
   dialog.showModal();
   cancel.focus();
+}
+
+/** Asks what to put in the Markdown file, then has the browser save it. */
+function confirmExport(sessionId) {
+  const dismiss = () => {
+    if (dialog.open) dialog.close();
+    dialog.remove();
+  };
+  const option = (name, label) =>
+    el('label', { class: 'option' }, el('input', { type: 'checkbox', name, checked: String(remembered(`export.${name}`, true)) !== 'false' }), ` ${label}`);
+  const tools = option('tools', t('exportTools'));
+  const thinking = option('thinking', t('exportThinking'));
+  const cancel = el('button', { type: 'button', onclick: dismiss }, t('cancel'));
+  const confirm = el('button', { type: 'button', class: 'primary' }, t('doExport'));
+  const dialog = el(
+    'dialog',
+    { class: 'confirm' },
+    el('h2', {}, t('exportTitle')),
+    el('p', {}, t('exportWhat')),
+    el('div', { class: 'options' }, tools, thinking),
+    el('p', { class: 'note' }, t('exportNote')),
+    el('div', { class: 'actions' }, cancel, confirm),
+  );
+  confirm.onclick = () => {
+    const chosen = {};
+    for (const name of ['tools', 'thinking']) {
+      chosen[name] = dialog.querySelector(`input[name=${name}]`).checked;
+      remember(`export.${name}`, chosen[name]);
+    }
+    const query = new URLSearchParams({ lang: state.lang, tools: chosen.tools ? '1' : '0', thinking: chosen.thinking ? '1' : '0' });
+    // The server names the file; a link it answers with an attachment saves it and leaves the page as it is.
+    el('a', { href: `/api/sessions/${encodeURIComponent(sessionId)}/export.md?${query}` }).click();
+    dismiss();
+  };
+  dialog.addEventListener('cancel', dismiss);
+  dialog.addEventListener('close', dismiss);
+  for (const earlier of document.querySelectorAll('dialog.confirm')) earlier.remove();
+  document.body.append(dialog);
+  dialog.showModal();
+  confirm.focus();
 }
 
 const compact = (n) =>
@@ -901,17 +955,22 @@ async function drawSession(view, sessionId, turn) {
       { class: 'headline' },
       el('a', { class: 'back', href: '#/sessions' }, t('back')),
       el(
-        'button',
-        {
-          type: 'button',
-          class: 'danger quiet',
-          onclick: () =>
-            confirmDeletion([{ sessionId, title: summary.title }], () => {
-              notice = t('deletedNotice', 1);
-              location.hash = '#/sessions';
-            }),
-        },
-        t('deleteSession'),
+        'div',
+        { class: 'headline-actions' },
+        el('button', { type: 'button', class: 'quiet', onclick: () => confirmExport(sessionId) }, t('exportMarkdown')),
+        el(
+          'button',
+          {
+            type: 'button',
+            class: 'danger quiet',
+            onclick: () =>
+              confirmDeletion([{ sessionId, title: summary.title }], () => {
+                notice = t('deletedNotice', 1);
+                location.hash = '#/sessions';
+              }),
+          },
+          t('deleteSession'),
+        ),
       ),
     ),
     el('h1', {}, summary.title || t('untitled')),

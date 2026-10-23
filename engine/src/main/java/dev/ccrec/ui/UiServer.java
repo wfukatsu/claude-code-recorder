@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dev.ccrec.cli.IngestLock;
+import dev.ccrec.cli.SessionMarkdown;
 import dev.ccrec.cli.SessionSummary;
 import dev.ccrec.cli.SpoolQueue;
 import dev.ccrec.model.Account;
@@ -309,6 +310,8 @@ public final class UiServer implements AutoCloseable {
       json(exchange, 200, records(parts[1], query));
     } else if (parts.length == 3 && parts[0].equals("sessions") && parts[2].equals("network")) {
       json(exchange, 200, network(parts[1]));
+    } else if (parts.length == 3 && parts[0].equals("sessions") && parts[2].equals("export.md")) {
+      export(exchange, parts[1], query);
     } else if (parts.length == 2 && parts[0].equals("content") && parts[1].matches("[0-9a-f]{64}")) {
       Optional<String> content = store.content(parts[1]);
       if (content.isPresent()) {
@@ -629,6 +632,32 @@ public final class UiServer implements AutoCloseable {
     rows.sort(java.util.Comparator.comparingLong((ObjectNode row) -> row.path("calls").asLong()).reversed());
     node.putArray("hosts").addAll(rows);
     return node;
+  }
+
+  /** A session's conversation as a Markdown file to save, as {@code ccrec export} writes it. */
+  private void export(HttpExchange exchange, String sessionId, Map<String, String> query) throws IOException {
+    Optional<SessionRecord> session = store.session(sessionId, currentAccountId);
+    List<MessageRecord> messages = store.messages(sessionId);
+    if (session.isEmpty() && messages.isEmpty()) {
+      json(exchange, 404, JSON.createObjectNode().put("error", "not recorded"));
+      return;
+    }
+    SessionMarkdown.Options options =
+        new SessionMarkdown.Options(
+            !"0".equals(query.get("thinking")),
+            !"0".equals(query.get("tools")),
+            SessionMarkdown.Options.DEFAULT_MAX_TOOL_CHARS,
+            "ja".equals(query.get("lang")) ? "ja" : "en",
+            java.time.ZoneId.systemDefault());
+    String markdown = SessionMarkdown.of(sessionId, session, messages, store::content, options);
+    String name = SessionMarkdown.fileName(sessionId, session, options.zone());
+    // The plain name for browsers that read no other; the whole one, in any script, for those that do.
+    String plain = name.replaceAll("[^A-Za-z0-9._-]", "_");
+    String encoded = java.net.URLEncoder.encode(name, StandardCharsets.UTF_8).replace("+", "%20");
+    exchange
+        .getResponseHeaders()
+        .set("Content-Disposition", "attachment; filename=\"" + plain + "\"; filename*=UTF-8''" + encoded);
+    send(exchange, 200, "text/markdown; charset=utf-8", markdown.getBytes(StandardCharsets.UTF_8));
   }
 
   private static int cut(String text) {

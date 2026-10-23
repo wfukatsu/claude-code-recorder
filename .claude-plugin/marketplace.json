@@ -1,0 +1,26 @@
+{
+  "name": "claude-code-recorder",
+  "owner": {
+    "name": "Wataru Fukatsu",
+    "url": "https://github.com/wfukatsu"
+  },
+  "metadata": {
+    "description": "Skills that work on what ccrec records of Claude Code sessions"
+  },
+  "plugins": [
+    {
+      "name": "ccrec",
+      "source": "./",
+      "strict": false,
+      "description": "Reviews your recorded Claude Code sessions and shows how to prompt better: token use and models, tool use, where Claude wavered, each traced to what the prompts left out, with a rewrite and why it works. Needs ccrec installed and recording.",
+      "author": {
+        "name": "Wataru Fukatsu",
+        "url": "https://github.com/wfukatsu"
+      },
+      "homepage": "https://github.com/wfukatsu/claude-code-recorder",
+      "license": "Apache-2.0",
+      "tags": ["prompting", "review", "token-usage", "claude-code", "ccrec"],
+      "skills": ["./skills/prompt-coach"]
+    }
+  ]
+}

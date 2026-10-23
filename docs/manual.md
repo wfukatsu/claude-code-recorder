@@ -269,6 +269,10 @@ Whether recording is working. It is `ccrec doctor` in a browser.
 
 "Refresh" reads it again.
 
+### Exporting as Markdown
+
+"Export as Markdown" at the top right of a session's page saves its conversation as a Markdown file: the prompts and the answers in order, then each sub-agent's under a heading of its own. Choose whether to include the tool calls with their results, and the thinking; both are folded under the answer they belong to. The file is named after the day and the title, such as `2026-10-08_Fix-paging-in-the-order-list_a1a1a1a1.md`. [`ccrec export`](#exporting-as-markdown-1) writes the same file.
+
 ### Deleting from the browser
 
 ![Confirming a deletion](images/en/ui-delete.jpg)
@@ -359,6 +363,50 @@ total      5 sessions               51        1,416       73,801        2,280   
 ```
 
 `messages` is the number of API messages; `web` is web searches and fetches together.
+
+### Exporting as Markdown
+
+```bash
+ccrec export <session-id>                        # into this directory
+ccrec export <session-id>... --out exports/      # one file each, into exports/
+ccrec export <session-id> --out talk.md --lang ja
+ccrec export <session-id> --out - --no-tools     # to the terminal, prompts and answers only
+```
+
+The prompts and the answers come in order, under a heading for each speaker. Tool calls, with what they returned, and thinking are folded under the answer they belong to (`<details>`, which GitHub and most Markdown viewers show folded); `--no-tools` and `--no-thinking` leave them out. Each tool input and result is kept up to 20,000 characters; `--max-output <n>` changes that, and 0 keeps everything. An image or a PDF a tool returned is named rather than included. The system prompt, tool definitions and attachments are left out. The text is as recorded, so what the recorder masked stays masked. `--lang ja` writes the labels in Japanese.
+
+### Reviewing your prompts with Claude
+
+This repository is also a Claude Code plugin, `ccrec`, with one skill, `prompt-coach`, that reads your recordings and tells you how to prompt better. It looks at token use and the models used, how the tools were used, and where Claude wavered or took something back, and traces each to what the prompts left out: what "done" means, the scope, the error itself. Each finding comes with the moment it happened, a rewrite, and why the rewrite works.
+
+Install it as a Claude Code plugin, in Claude Code (2.1.275 or later):
+
+```text
+/plugin install ccrec --marketplace wfukatsu/claude-code-recorder
+```
+
+On an older Claude Code, add the marketplace first: `/plugin marketplace add wfukatsu/claude-code-recorder`, then `/plugin install ccrec@claude-code-recorder`. The skill reads through the `ccrec` you installed with npm, so install and set that up first. Without the plugin, a link to the skill in the installed package works too:
+
+```bash
+ln -s "$(npm root -g)/claude-code-recorder/skills/prompt-coach" ~/.claude/skills/prompt-coach
+```
+
+Run it as `/ccrec:prompt-coach` (or `/prompt-coach` when linked), or ask Claude Code something like "review my prompts". Two optional arguments say what to review and from when:
+
+| Argument | Values |
+|---|---|
+| What | `current` (this session), `all` (all your sessions), or a session id |
+| From when | `last` (since the last review of the same target), `7d`, `30d`, `whole` (the whole session), or a date `YYYY-MM-DD` |
+
+What is not given is asked first, with these defaults: this session; since the last review of it, or with none, the whole session (for all sessions, the last 7 days).
+
+The report is laid out as:
+
+1. **Security**, always there: credentials put into prompts, named by kind and masked (`ghp_****`; a `[REDACTED]` ccrec put in when recording counts too, since the value was sent to Claude before it was masked), confidential material (a "confidential" marking, card numbers, lists of email addresses), and text in tool results or pastes that tried to steer Claude — "ignore the previous instructions", "do not tell the user" — with where it came from and what Claude answered next. Found in a session that ran with permissions bypassed, it is the most severe.
+2. **Since the last review**: each of its findings, how often it came up then and now, and whether it improved; an improvement in what prompts carry comes with a prompt of yours that now does.
+3. **Suggestions**, from what happened in the period: what happened, what in the prompt led to it, a rewrite, and why the rewrite works.
+
+It reads through `ccrec` alone; nothing in the database changes. Reports go to `~/.ccrec/prompt-coach/reports/` and the record of each review to `~/.ccrec/prompt-coach/runs/`, both readable by you only, since they quote your prompts.
 
 ## 5. Deleting recordings
 
@@ -531,6 +579,7 @@ A recording is running at that moment. Wait a few seconds and delete again.
 | `ccrec sessions [--limit <n>] [--account <id>] [--day <yyyymmdd> [--org <id>]] [--json]` | Lists sessions |
 | `ccrec show <session-id> [--full] [--kind <kind,…>] [--json]` | Shows what was said and done |
 | `ccrec summary <session-id> [--json]` | Sums a session up |
+| `ccrec export <session-id>... [--out <dir\|file.md\|->] [--lang en\|ja] [--no-tools] [--no-thinking] [--max-output <n>]` | Writes the conversation as Markdown |
 | `ccrec usage [<session-id>...] [--json]` | Usage per model |
 | `ccrec delete <session-id>...` | Deletes sessions |
 | `ccrec delete --before <yyyy-mm-dd> \| --older-than <n>d [--dry-run] [--account <id>]` | Deletes old sessions together |
