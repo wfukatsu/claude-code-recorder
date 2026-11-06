@@ -249,11 +249,11 @@ class MainTest {
     assertEquals(0, Main.run(new String[] {"ingest", "--home", home.toString()}));
 
     String one = printed(0, "usage", "busy", "--home", home.toString());
-    assertTrue(one.lines().anyMatch(l -> l.matches("busy +claude-opus-5-5 +4 +4,000 +800 +200 +120 +160 +12")), one);
-    assertTrue(one.lines().anyMatch(l -> l.matches("total +1 session +5 +5,000 +1,000 +250 +150 +200 +15")), one);
+    assertTrue(one.lines().anyMatch(l -> l.matches("busy +claude-opus-5-5 +4 +4,000 +800 +200 +120 +160 +12 +\\$0\\.03")), one);
+    assertTrue(one.lines().anyMatch(l -> l.matches("total +1 session +5 +5,000 +1,000 +250 +150 +200 +15 +\\$0\\.03")), one);
 
     String all = printed(0, "usage", "--account", "acct-1", "--home", home.toString());
-    assertTrue(all.lines().anyMatch(l -> l.matches("acct-1 +claude-haiku-4-5 +2 +2,000 +400 +100 +60 +80 +6")), all);
+    assertTrue(all.lines().anyMatch(l -> l.matches("acct-1 +claude-haiku-4-5 +2 +2,000 +400 +100 +60 +80 +6 +\\$0\\.00")), all);
     assertTrue(all.lines().anyMatch(l -> l.matches("total +2 sessions +10 +10,000 .*")), all);
 
     JsonNode json = new ObjectMapper().readTree(printed(0, "usage", "busy", "--json", "--home", home.toString()));

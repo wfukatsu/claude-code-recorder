@@ -516,7 +516,17 @@ public final class Main {
     }
     if (options.containsKey("json")) {
       ArrayNode array = JSON.createArrayNode();
-      rows.forEach(row -> array.add(JSON.valueToTree(row)));
+      rows.forEach(
+          row -> {
+            ObjectNode node = JSON.valueToTree(row);
+            java.util.OptionalDouble cost = dev.ccrec.model.Pricing.cost(row);
+            if (cost.isPresent()) {
+              node.put("costUsd", cost.getAsDouble());
+            } else {
+              node.putNull("costUsd");
+            }
+            array.add(node);
+          });
       out.println(array.toPrettyString());
       return 0;
     }
@@ -535,17 +545,31 @@ public final class Main {
       modelWidth = Math.max(modelWidth, row.model().length());
     }
     String format =
-        "%-" + scopeWidth + "s  %-" + modelWidth + "s  %8s  %11s  %11s  %11s  %13s  %13s  %5s%n";
-    out.printf(format, scope, "model", "messages", "input", "output", "thinking", "cache read", "cache write", "web");
+        "%-" + scopeWidth + "s  %-" + modelWidth + "s  %8s  %11s  %11s  %11s  %13s  %13s  %5s  %10s%n";
+    out.printf(format, scope, "model", "messages", "input", "output", "thinking", "cache read", "cache write", "web", "cost (USD)");
     UsageRecord total = UsageRecord.of(null, null, null, new long[UsageRecord.COUNTERS]);
+    double totalCost = 0;
+    boolean totalPartial = false;
     for (UsageRecord row : rows) {
-      usageRow(format, perSession ? row.sessionId() : row.accountId(), row.model(), row);
+      java.util.OptionalDouble cost = dev.ccrec.model.Pricing.cost(row);
+      // A row with no tokens needs no price; one with tokens and no known price makes the total a floor.
+      if (cost.isPresent()) {
+        totalCost += cost.getAsDouble();
+      } else if (row.inputTokens() + row.outputTokens() + row.cacheReadTokens() + row.cacheCreationTokens() > 0) {
+        totalPartial = true;
+      }
+      usageRow(format, perSession ? row.sessionId() : row.accountId(), row.model(), row, money(cost));
       total = total.plus(row);
     }
-    usageRow(format, "total", totalOf, total);
+    usageRow(format, "total", totalOf, total, money(java.util.OptionalDouble.of(totalCost)) + (totalPartial ? "+" : ""));
+    out.println("cost: an estimate at Anthropic list prices; \"-\" is a model with no known price.");
   }
 
-  private void usageRow(String format, String scope, String model, UsageRecord row) {
+  private static String money(java.util.OptionalDouble usd) {
+    return usd.isPresent() ? String.format(java.util.Locale.ROOT, "$%,.2f", usd.getAsDouble()) : "-";
+  }
+
+  private void usageRow(String format, String scope, String model, UsageRecord row, String cost) {
     out.printf(
         format,
         scope,
@@ -556,7 +580,8 @@ public final class Main {
         grouped(row.thinkingTokens()),
         grouped(row.cacheReadTokens()),
         grouped(row.cacheCreationTokens()),
-        grouped(row.webSearchRequests() + row.webFetchRequests()));
+        grouped(row.webSearchRequests() + row.webFetchRequests()),
+        cost);
   }
 
   /**
