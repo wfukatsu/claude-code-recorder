@@ -1040,7 +1040,7 @@ function usageTable(usage) {
         'tbody',
         {},
         usage.map((u) => row(u.model, (field) => u[field])),
-        usage.length > 1 ? row(t('total'), (field) => (field === 'estCostUsd' ? usage.reduce((total, u) => total + (u.estCostUsd ?? 0), 0) : usage.reduce((total, u) => total + u[field], 0)), true) : null,
+        usage.length > 1 ? row(t('total'), (field) => (field === 'estCostUsd' ? (usage.some((u) => u.estCostUsd !== null && u.estCostUsd !== undefined) ? usage.reduce((total, u) => total + (u.estCostUsd ?? 0), 0) : null) : usage.reduce((total, u) => total + u[field], 0)), true) : null,
       ),
     ),
   );
@@ -1596,8 +1596,10 @@ async function drawUsage(view, turn) {
       project.sessions += 1;
       if (s.costUsd !== null) project.cost = (project.cost ?? 0) + s.costUsd;
       for (const u of s.usageByModel) {
-        const model = perModel.get(u.model) ?? { messages: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, thinkingTokens: 0, webSearchRequests: 0, webFetchRequests: 0, estCostUsd: 0 };
-        for (const field of Object.keys(model)) model[field] += u[field] ?? 0;
+        const model = perModel.get(u.model) ?? { messages: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, thinkingTokens: 0, webSearchRequests: 0, webFetchRequests: 0, estCostUsd: null };
+        for (const field of Object.keys(model)) if (field !== 'estCostUsd') model[field] += u[field] ?? 0;
+        // A model with no known price stays null (shown as –), it is not a free one.
+        if (u.estCostUsd !== null && u.estCostUsd !== undefined) model.estCostUsd = (model.estCostUsd ?? 0) + u.estCostUsd;
         perModel.set(u.model, model);
         project.messages += u.messages;
         project.output += u.outputTokens;
