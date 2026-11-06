@@ -353,7 +353,27 @@ public final class UiServer implements AutoCloseable {
       long[] spent = new long[UsageRecord.COUNTERS];
       Set<String> models = new TreeSet<>();
       List<UsageRecord> byModel = store.usage(session.sessionId());
-      node.set("usageByModel", JSON.valueToTree(byModel));
+      ArrayNode usageByModel = JSON.createArrayNode();
+      double estimated = 0;
+      boolean priced = false;
+      for (UsageRecord usage : byModel) {
+        ObjectNode row = JSON.valueToTree(usage);
+        java.util.OptionalDouble cost = dev.ccrec.model.Pricing.cost(usage);
+        if (cost.isPresent()) {
+          row.put("estCostUsd", cost.getAsDouble());
+          estimated += cost.getAsDouble();
+          priced = true;
+        } else {
+          row.putNull("estCostUsd");
+        }
+        usageByModel.add(row);
+      }
+      node.set("usageByModel", usageByModel);
+      if (priced) {
+        node.put("estCostUsd", estimated);
+      } else {
+        node.putNull("estCostUsd");
+      }
       for (UsageRecord usage : byModel) {
         long[] counters = usage.counters();
         for (int i = 0; i < spent.length; i++) {

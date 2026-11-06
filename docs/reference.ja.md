@@ -56,6 +56,7 @@ Claude Code は 1 回の API 応答をブロックごとの複数行に分けて
 - 応答ごとの記録: `messages` の `model` と、`input_tokens` / `output_tokens` / `cache_read_tokens` / `cache_creation_tokens`。`ccrec show` の各行にも表示します。
 - セッションごとの合計: `session_usage` に、モデル別の API 応答数とトークン数を持ちます。サブエージェントの分も、そのセッションに含めます。取り込みと同じトランザクションで加算するので、記録とずれません。同じ行を取り込み直しても二重には数えません。
 - `ccrec usage` は `ccrec sessions` と同じ絞り込み（`--limit` / `--account` / `--day` / `--org`）を受け取り、対象セッションの合計をアカウント × モデルで表示します。`--json` も使えます。
+- `cost (USD)` 列（`--json` では `costUsd`、UI では `estCostUsd`）は、モデルごとの Anthropic 公開価格で計算した目安です。入力と出力はそれぞれの単価、キャッシュ読み取りは入力単価の 0.1 倍、キャッシュ書き込みは 1.25 倍（5 分）または 2 倍（1 時間）で計算します。割引・バッチ・fast モード・定額プランは反映しません。価格が不明なモデルは `-`（JSON では null）で、合計にも含めず、合計の末尾に `+` が付きます。単価は `engine/src/main/java/dev/ccrec/model/Pricing.java` にあります。
 - `session_usage` が無かった頃に記録したセッションの分は、書き込みを伴うコマンドか `ccrec usage` を最初に実行したときに、`messages` から 1 度だけ集計します。
 - トークン数の内訳として、thinking のトークン数（出力の内数）、キャッシュ書き込みの保持時間別（5 分 / 1 時間、キャッシュ書き込みの内数）、Web 検索・Web 取得の回数も、同じ 2 か所に記録します。
 - `<synthetic>` は Claude Code が API を呼ばずに作った応答で、トークン数は 0 です。

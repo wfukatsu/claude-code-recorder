@@ -174,7 +174,24 @@ public final class SessionSummary {
     summary.set("pullRequests", JSON.valueToTree(pullRequests));
     ArrayNode toolRows = summary.putArray("tools");
     tools.forEach((tool, counts) -> toolRows.addObject().put("tool", tool).put("calls", counts[0]).put("errors", counts[1]));
-    summary.set("usage", JSON.valueToTree(usage));
+    ArrayNode usageRows = summary.putArray("usage");
+    double estimated = 0;
+    boolean priced = false;
+    for (UsageRecord u : usage) {
+      ObjectNode row = JSON.valueToTree(u);
+      java.util.OptionalDouble cost = dev.ccrec.model.Pricing.cost(u);
+      if (cost.isPresent()) {
+        row.put("estCostUsd", cost.getAsDouble());
+        estimated += cost.getAsDouble();
+        priced = true;
+      } else {
+        row.putNull("estCostUsd");
+      }
+      usageRows.add(row);
+    }
+    if (priced) {
+      summary.put("estCostUsd", estimated);
+    }
 
     return summary;
   }

@@ -115,6 +115,8 @@ const TEXT = {
     thinking: 'thinking',
     web: 'Web',
     cost: '金額',
+    estCost: '推定金額',
+    estCostNote: '推定金額は Anthropic の公開価格で計算した目安です（割引・バッチ・定額プランは反映しません）。価格が不明なモデルは含みません。',
     tokens: 'トークン',
     noSessions: 'このアカウントで記録されたセッションはありません。',
     noMatch: '条件に合うセッションはありません。',
@@ -319,6 +321,8 @@ const TEXT = {
     thinking: 'Thinking',
     web: 'Web',
     cost: 'Cost',
+    estCost: 'Est. cost',
+    estCostNote: 'Estimated at Anthropic list prices; discounts, batch rates and subscription plans are not reflected. Models with no known price are left out.',
     tokens: 'tokens',
     noSessions: 'No sessions are recorded under this account.',
     noMatch: 'No session matches the filters.',
@@ -998,6 +1002,7 @@ async function drawSession(view, sessionId, turn) {
       summary.compactions ? stat(whole(summary.compactions), t('compactions')) : null,
       summary.pullRequests.length ? stat(whole(summary.pullRequests.length), t('pullRequests')) : null,
       summary.costUsd !== undefined ? stat(money(summary.costUsd), t('cost')) : null,
+      summary.estCostUsd !== undefined ? stat(money(summary.estCostUsd), t('estCost')) : null,
     ),
     tabs,
     panel,
@@ -1022,6 +1027,7 @@ function usageTable(usage) {
       el(strong ? 'th' : 'td', {}, label),
       columns.map(([, field]) => el('td', { class: 'num' }, whole(of(field)))),
       el('td', { class: 'num' }, whole(of('webSearchRequests') + of('webFetchRequests'))),
+      el('td', { class: 'num' }, of('estCostUsd') === null || of('estCostUsd') === undefined ? '–' : money(of('estCostUsd'))),
     );
   return el(
     'div',
@@ -1029,12 +1035,12 @@ function usageTable(usage) {
     el(
       'table',
       {},
-      el('thead', {}, el('tr', {}, el('th', {}, t('model')), columns.map(([label]) => el('th', { class: 'num' }, t(label))), el('th', { class: 'num' }, t('web')))),
+      el('thead', {}, el('tr', {}, el('th', {}, t('model')), columns.map(([label]) => el('th', { class: 'num' }, t(label))), el('th', { class: 'num' }, t('web')), el('th', { class: 'num' }, t('estCost')))),
       el(
         'tbody',
         {},
         usage.map((u) => row(u.model, (field) => u[field])),
-        usage.length > 1 ? row(t('total'), (field) => usage.reduce((total, u) => total + u[field], 0), true) : null,
+        usage.length > 1 ? row(t('total'), (field) => (field === 'estCostUsd' ? usage.reduce((total, u) => total + (u.estCostUsd ?? 0), 0) : usage.reduce((total, u) => total + u[field], 0)), true) : null,
       ),
     ),
   );
@@ -1590,8 +1596,8 @@ async function drawUsage(view, turn) {
       project.sessions += 1;
       if (s.costUsd !== null) project.cost = (project.cost ?? 0) + s.costUsd;
       for (const u of s.usageByModel) {
-        const model = perModel.get(u.model) ?? { messages: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, thinkingTokens: 0, webSearchRequests: 0, webFetchRequests: 0 };
-        for (const field of Object.keys(model)) model[field] += u[field];
+        const model = perModel.get(u.model) ?? { messages: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, thinkingTokens: 0, webSearchRequests: 0, webFetchRequests: 0, estCostUsd: 0 };
+        for (const field of Object.keys(model)) model[field] += u[field] ?? 0;
         perModel.set(u.model, model);
         project.messages += u.messages;
         project.output += u.outputTokens;
@@ -1614,12 +1620,14 @@ async function drawUsage(view, turn) {
         stat(whole(shown.length), t('sessions')),
         stat(compact(total), t(usageView.metric)),
         stat(costs.length ? money(costs.reduce((sum, s) => sum + s.costUsd, 0)) : '–', t('cost')),
+        stat(money(shown.reduce((sum, s) => sum + (s.estCostUsd ?? 0), 0)), t('estCost')),
       ),
       el('h2', {}, t('byDay')),
       chart(keys, perDay, models),
       el('p', { class: 'note' }, t('byStartDay')),
       el('h2', {}, t('byModel')),
       usageTable(models.map((model) => ({ model, ...perModel.get(model) }))),
+      el('p', { class: 'note' }, t('estCostNote')),
       el('h2', {}, t('byProject')),
       el(
         'div',
